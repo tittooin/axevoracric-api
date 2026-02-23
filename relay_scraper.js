@@ -6,83 +6,82 @@
 const INGESTION_ENDPOINT = process.env.INGESTION_ENDPOINT || 'https://cricbuzz-api-v2.axevoracric.workers.dev/api/v1/ingest/push';
 const INGESTION_TOKEN = process.env.INGESTION_TOKEN || 'axevora_test_secret_123';
 
-async function fetchCricbuzzLive() {
-    console.log('[Relay] Fetching Cricbuzz Live Scores...');
+const TARGET_URLS = [
+    'https://www.cricbuzz.com/cricket-match/live-scores',
+    'https://www.cricbuzz.com/cricket-match/live-scores/upcoming-matches',
+    'https://www.cricbuzz.com/cricket-schedule'
+];
+
+async function fetchFromUrl(url) {
+    console.log(`[Relay] Fetching: ${url}`);
     try {
-        const response = await fetch('https://www.cricbuzz.com/cricket-match/live-scores', {
+        const response = await fetch(url, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
             }
         });
+        return await response.text();
+    } catch (e) {
+        console.error(`[Relay] Failed to fetch ${url}:`, e.message);
+        return '';
+    }
+}
 
-        const html = await response.text();
-        console.log(`[Relay] HTML Length: ${html.length}`);
+async function scrapeAll() {
+    const allMatches = [];
+    const seenIds = new Set();
 
-        // Strategy 1: Look for common match links in HTML
-        const idRegex = /\/live-cricket-scores\/(\d+)/g;
-        const foundIds = new Set();
+    for (const url of TARGET_URLS) {
+        const html = await fetchFromUrl(url);
+        if (!html) continue;
+
+        // Extract every match-like ID from links
+        const idRegex = /(?:\/live-cricket-scores\/|\/cricket-scores\/|\/live-cricket-scorecard\/|\/cricket-match\/)(\d+)/g;
         let idMatch;
         while ((idMatch = idRegex.exec(html)) !== null) {
-            foundIds.add(idMatch[1]);
-        }
+            const id = idMatch[1];
+            if (seenIds.has(id)) continue;
+            seenIds.add(id);
 
-        console.log(`[Relay] Found match-like IDs in links: ${Array.from(foundIds).join(', ')}`);
+            // Robust JSON extraction for match details
+            const chunkRegex = new RegExp(`"matchId":${id},.*?"team1":{[^}]*"teamName":"([^"]+)"},"team2":{[^}]*"teamName":"([^"]+)"}.*?"state":"([^"]+)"`);
+            const snippetMatch = chunkRegex.exec(html);
 
-        // Strategy 2: React Chunk Regex
-        const matches = [];
-        const matchRegex = /"matchId":(\d+),"seriesId":\d+,"seriesName":"([^"]+)","matchDesc":"([^"]+)","matchFormat":"([^"]+)"/g;
+            let teamA = 'Live Match', teamB = 'Updating...', status = 'live';
 
-        let match;
-        while ((match = matchRegex.exec(html)) !== null) {
-            const [_, id, series, desc, format] = match;
-            if (matches.find(m => m.source_match_id === id)) continue;
+            if (snippetMatch) {
+                teamA = snippetMatch[1];
+                teamB = snippetMatch[2];
+                const state = snippetMatch[3].toLowerCase();
+                if (['preview', 'upcoming', 'scheduled'].includes(state)) {
+                    status = 'scheduled';
+                } else if (['complete', 'result'].includes(state)) {
+                    status = 'completed';
+                }
+            }
 
-            matches.push({
+            allMatches.push({
                 id: `relay:${id}`,
                 source: 'relay',
                 source_match_id: id,
-                team_a: 'Live Match',
-                team_b: 'Loading...',
-                status: 'live',
+                team_a: teamA,
+                team_b: teamB,
+                status: status,
                 start_time: Math.floor(Date.now() / 1000),
                 provider_updated_at: Math.floor(Date.now() / 1000),
                 squads: JSON.stringify({ team_a: [], team_b: [] }),
                 lineups: JSON.stringify({ team_a: [], team_b: [] }),
-                raw_payload: JSON.stringify({ series, desc, format, source: 'react_chunk' })
+                raw_payload: JSON.stringify({ url, source: 'relay_v4', fetched_at: new Date().toISOString() })
             });
         }
-
-        // Strategy 3: Link Fallback
-        if (matches.length === 0 && foundIds.size > 0) {
-            console.log(`[Relay] Falling back to link-based skeletons.`);
-            for (const id of foundIds) {
-                matches.push({
-                    id: `relay:${id}`,
-                    source: 'relay',
-                    source_match_id: id,
-                    team_a: 'Live Match',
-                    team_b: 'Updating...',
-                    status: 'live',
-                    start_time: Math.floor(Date.now() / 1000),
-                    provider_updated_at: Math.floor(Date.now() / 1000),
-                    squads: JSON.stringify({ team_a: [], team_b: [] }),
-                    lineups: JSON.stringify({ team_a: [], team_b: [] }),
-                    raw_payload: JSON.stringify({ note: "Link-based fallback", source: 'html_links' })
-                });
-            }
-        }
-
-        console.log(`[Relay] Total matches prepared for ingestion: ${matches.length}`);
-        return matches;
-
-    } catch (error) {
-        console.error('[Relay Error]:', error);
-        return [];
     }
+
+    console.log(`[Relay] Total unique matches prepared: ${allMatches.length}`);
+    return allMatches;
 }
 
 async function run() {
-    const matches = await fetchCricbuzzLive();
+    const matches = await scrapeAll();
 
     if (matches.length === 0) {
         console.log('[Relay] No matches found, skipping push.');
@@ -91,17 +90,21 @@ async function run() {
 
     console.log(`[Relay] Pushing ${matches.length} matches to Worker...`);
 
-    const response = await fetch(INGESTION_ENDPOINT, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${INGESTION_TOKEN}`
-        },
-        body: JSON.stringify({ matches })
-    });
+    try {
+        const response = await fetch(INGESTION_ENDPOINT, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${INGESTION_TOKEN}`
+            },
+            body: JSON.stringify({ matches })
+        });
 
-    const result = await response.json();
-    console.log('[Relay Result]:', result);
+        const result = await response.json();
+        console.log('[Relay Result]:', result);
+    } catch (e) {
+        console.error('[Relay Result Failed]:', e.message);
+    }
 }
 
 run();
