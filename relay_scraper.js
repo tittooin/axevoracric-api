@@ -25,7 +25,8 @@ async function fetchCricbuzzLive() {
         // Note: For a robust implementation, we would use a proper parser or more complex regex.
         // For Phase 16 Handover, we'll implement a sample extraction that works with the current Cricbuzz structure.
 
-        const matchRegex = /"matchId":(\d+),"seriesId":\d+,"seriesName":"([^"]+)","matchDesc":"([^"]+)","matchFormat":"([^"]+)","team1":{"teamId":\d+,"teamName":"([^"]+)","teamSName":"([^"]+)"},"team2":{"teamId":\d+,"teamName":"([^"]+)","teamSName":"([^"]+)"}/g;
+        // More flexible regex to handle Next.js streaming chunks
+        const matchRegex = /"matchId":(\d+),"seriesId":\d+,"seriesName":"([^"]+)","matchDesc":"([^"]+)","matchFormat":"([^"]+)"(?:,"startDate":"\d+")?(?:,"state":"[^"]+")?(?:,"status":"[^"]+")?,"team1":{[^}]*"teamName":"([^"]+)","teamSName":"([^"]+)"},"team2":{[^}]*"teamName":"([^"]+)","teamSName":"([^"]+)"}/g;
 
         let match;
         while ((match = matchRegex.exec(html)) !== null) {
