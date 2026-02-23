@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Cricket Score | Scorecard | Cricbuzz Clone API Test</title>
+    <!-- Google Fonts for styling similarity -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Roboto', sans-serif;
+        }
+
+        body {
+            background-color: #ecf0f1;
+            color: #333;
+        }
+
+        /* Top Header */
+        .cb-header {
+            background-color: #009270;
+            height: 50px;
+            width: 100%;
+        }
+
+        /* Wrapper */
+        .cb-container {
+            width: 980px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            min-height: 100vh;
+        }
+
+        /* Nav Menu */
+        .cb-nav {
+            display: flex;
+            background: #fff;
+            padding: 0 16px;
+            border-bottom: 1px solid #e3e6e3;
+        }
+
+        .cb-nav a {
+            text-decoration: none;
+            color: #4a4a4a;
+            padding: 16px;
+            font-size: 14px;
+        }
+
+        .cb-nav a.active {
+            color: #009270;
+            border-bottom: 3px solid #009270;
+            font-weight: 500;
+        }
+
+        /* Main Content Grid */
+        .cb-main {
+            display: flex;
+            padding: 16px;
+            gap: 20px;
+        }
+
+        .cb-left {
+            width: 66%;
+        }
+
+        .cb-right {
+            width: 32%;
+            border-left: 1px solid #e3e6e3;
+            padding-left: 16px;
+        }
+
+        /* Page Title */
+        h1 {
+            font-size: 24px;
+            font-weight: 700;
+            color: #000;
+            margin-bottom: 16px;
+        }
+
+        /* Sub Nav */
+        .cb-subnav {
+            display: flex;
+            border-bottom: 1px solid #e3e6e3;
+            margin-bottom: 16px;
+        }
+
+        .cb-subnav span {
+            padding: 8px 16px;
+            cursor: pointer;
+            color: #4a4a4a;
+        }
+
+        .cb-subnav span.active {
+            color: #009270;
+            border-bottom: 2px solid #009270;
+            font-weight: 500;
+            margin-bottom: -1px;
+        }
+
+        /* Filter Pills */
+        .cb-filters {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+
+        .cb-filter-pill {
+            background-color: #e3e6e3;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 13px;
+            color: #4a4a4a;
+            cursor: pointer;
+        }
+
+        .cb-filter-pill.active {
+            background-color: #009270;
+            color: #fff;
+        }
+
+        /* Match Card */
+        .cb-match-card {
+            border: 1px solid #e3e6e3;
+            border-radius: 4px;
+            margin-bottom: 16px;
+        }
+
+        .cb-match-header {
+            background-color: #e3e6e3;
+            padding: 8px 12px;
+            font-size: 14px;
+            color: #4a4a4a;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .cb-match-body {
+            padding: 12px;
+        }
+
+        .cb-match-desc {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 12px;
+        }
+
+        .cb-team-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .cb-team-name {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 15px;
+            font-weight: 500;
+            color: #222;
+        }
+
+        .cb-team-flag {
+            width: 24px;
+            height: 16px;
+            background-color: #ccc;
+            border-radius: 2px;
+        }
+
+        .cb-team-score {
+            font-weight: 700;
+            font-size: 14px;
+        }
+
+        .cb-match-state {
+            color: #005087;
+            font-size: 13px;
+            margin-top: 12px;
+            margin-bottom: 12px;
+        }
+
+        .cb-match-footer {
+            border-top: 1px solid #e3e6e3;
+            padding: 8px 12px;
+            font-size: 13px;
+            display: flex;
+            gap: 16px;
+        }
+
+        .cb-match-footer a {
+            color: #005087;
+            text-decoration: none;
+        }
+
+        .cb-match-footer a:hover {
+            text-decoration: underline;
+        }
+
+        .loader {
+            padding: 20px;
+            text-align: center;
+            color: #666;
+        }
+
+        /* Right Panel Fake Videos */
+        .cb-video-title {
+            color: #009270;
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 16px;
+        }
+
+        .cb-video-card {
+            border: 1px solid #e3e6e3;
+            border-radius: 4px;
+            margin-bottom: 16px;
+            overflow: hidden;
+        }
+
+        .cb-video-img {
+            width: 100%;
+            height: 145px;
+            background: #2a2a2a;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-weight: 700;
+        }
+
+        .cb-video-desc {
+            padding: 12px;
+            font-size: 14px;
+            color: #222;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="cb-header"></div>
+
+    <div class="cb-container">
+
+        <div class="cb-nav">
+            <a href="#" class="active">Current Matches</a>
+            <a href="#">Current & Future Series</a>
+            <a href="#">Matches By Day</a>
+            <a href="#">Teams</a>
+            <a href="#">Series Archive</a>
+        </div>
+
+        <div class="cb-main">
+
+            <div class="cb-left">
+                <h1>Live Cricket Score</h1>
+
+                <div class="cb-subnav">
+                    <span id="tab-live" class="active" onclick="switchTab('live')">Live</span>
+                    <span id="tab-completed" onclick="switchTab('completed')">Recent</span>
+                    <span id="tab-scheduled" onclick="switchTab('scheduled')">Upcoming</span>
+                </div>
+
+                <div class="cb-filters">
+                    <div class="cb-filter-pill active">All</div>
+                    <div class="cb-filter-pill">International</div>
+                    <div class="cb-filter-pill">League</div>
+                    <div class="cb-filter-pill">Domestic</div>
+                    <div class="cb-filter-pill">Women</div>
+                </div>
+
+                <div id="match-list">
+                    <div class="loader">Loading Matches from Axevora API...</div>
+                </div>
+            </div>
+
+            <div class="cb-right">
+                <div class="cb-video-title">FEATURED VIDEOS</div>
+
+                <div class="cb-video-card">
+                    <div class="cb-video-img">
+                        ▶ API TESTING
+                    </div>
+                    <div class="cb-video-desc">
+                        Axevora Cricket API: Direct Live Feed Demonstration
+                    </div>
+                </div>
+
+                <div class="cb-video-card">
+                    <div class="cb-video-img" style="background: #600;">
+                        ▶ PRODUCTION
+                    </div>
+                    <div class="cb-video-desc">
+                        100% Free Auto-Push Architecture running on Edge Workers
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+    <script>
+        const API_URL = 'https://cricbuzz-api-v2.axevoracric.workers.dev/api/v1/all';
+        const API_KEY = '73bd32db-4a16-4191-8a51-151309845191.c2bd71d77463aa0cc50597bea0aab326e0781d80d866f2f00e28039d0fe70091';
+
+        // State
+        let matchesData = {
+            live: [],
+            scheduled: [],
+            completed: []
+        };
+        let currentTab = 'live';
+
+        function switchTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('.cb-subnav span').forEach(el => el.classList.remove('active'));
+            document.getElementById('tab-' + tab).classList.add('active');
+            renderMatches();
+        }
+
+        async function fetchAPI() {
+            try {
+                const response = await fetch(API_URL, {
+                    headers: { 'x-api-key': API_KEY }
+                });
+
+                const json = await response.json();
+
+                if (json.success && json.data) {
+                    // Reset
+                    matchesData = { live: [], scheduled: [], completed: [] };
+
+                    // The API puts all matches (live & upcoming) into json.data.live array 
+                    // and also has json.data.upcoming based on our recent changes.
+                    // Let's just combine everything we received and sort them by status ourselves to be safe.
+                    const combined = [...(json.data.live || []), ...(json.data.upcoming || [])];
+
+                    combined.forEach(m => {
+                        if (m.status === 'live') matchesData.live.push(m);
+                        else if (m.status === 'scheduled') matchesData.scheduled.push(m);
+                        else if (m.status === 'completed') matchesData.completed.push(m);
+                    });
+
+                    // Remove duplicates if any
+                    const uniqueMatches = (arr) => [...new Map(arr.map(item => [item.id, item])).values()];
+                    matchesData.live = uniqueMatches(matchesData.live);
+                    matchesData.scheduled = uniqueMatches(matchesData.scheduled);
+                    matchesData.completed = uniqueMatches(matchesData.completed);
+
+                    renderMatches();
+                } else {
+                    document.getElementById('match-list').innerHTML = '<div class="loader">Failed to parse API Data</div>';
+                }
+            } catch (e) {
+                console.error(e);
+                document.getElementById('match-list').innerHTML = '<div class="loader">Error connecting to API!</div>';
+            }
+        }
+
+        function renderMatches() {
+            const listContainer = document.getElementById('match-list');
+            const dataToRender = matchesData[currentTab];
+
+            if (!dataToRender || dataToRender.length === 0) {
+                listContainer.innerHTML = '<div class="loader">No matches available for this section.</div>';
+                return;
+            }
+
+            let html = '';
+
+            dataToRender.forEach(m => {
+                // Formatting Title slightly
+                const tournamentStr = m.source === 'relay' ? 'AXEVORA LIVE RELAY INDEX' : 'CRICKET SERIES MATCH';
+                let stateText = '';
+
+                if (m.status === 'live') stateText = m.team_a + ' is playing ' + m.team_b;
+                if (m.status === 'scheduled') stateText = 'Starts at ' + new Date(m.start_time * 1000).toLocaleString();
+                if (m.status === 'completed') stateText = m.team_a + ' vs ' + m.team_b + ' Completed';
+
+                html += `
+                <div class="cb-match-card">
+                    <div class="cb-match-header">
+                        <span>${tournamentStr}</span>
+                        <span>❯</span>
+                    </div>
+                    <div class="cb-match-body">
+                        <div class="cb-match-desc">Match ID: ${m.id} • API Source: ${m.source}</div>
+                        
+                        <div class="cb-team-row">
+                            <div class="cb-team-name">
+                                <div class="cb-team-flag" style="background:#bdc3c7"></div>
+                                ${m.team_a}
+                            </div>
+                            <div class="cb-team-score">-</div>
+                        </div>
+                        
+                        <div class="cb-team-row">
+                            <div class="cb-team-name">
+                                <div class="cb-team-flag" style="background:#95a5a6"></div>
+                                ${m.team_b}
+                            </div>
+                            <div class="cb-team-score">-</div>
+                        </div>
+
+                        <div class="cb-match-state">${stateText}</div>
+                    </div>
+                    <div class="cb-match-footer">
+                        <a href="#">Live Score</a>
+                        <span>|</span>
+                        <a href="#">Scorecard</a>
+                        <span>|</span>
+                        <a href="#">Full Commentary</a>
+                        <span>|</span>
+                        <a href="#">News</a>
+                    </div>
+                </div>
+                `;
+            });
+
+            listContainer.innerHTML = html;
+        }
+
+        // Init
+        fetchAPI();
+        // Auto refresh every 30 seconds
+        setInterval(fetchAPI, 30000);
+
+    </script>
+</body>
+
+</html>
