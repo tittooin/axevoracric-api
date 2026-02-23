@@ -359,9 +359,19 @@
 
         function switchDetailTab(tab) {
             currentDetailTab = tab;
+            // Clear active from all detail tabs
             document.querySelectorAll('#match-detail-view .cb-subnav span').forEach(el => el.classList.remove('active'));
-            document.getElementById('tab-' + tab).classList.add('active');
+
+            // Focus on the specific tab by ID
+            const tabId = 'tab-' + tab;
+            const tabEl = document.getElementById(tabId);
+            if (tabEl) {
+                tabEl.classList.add('active');
+            }
+
             renderDetailContent();
+            // Scroll to the detail container top for better mobile UX
+            document.getElementById('match-detail-view').scrollIntoView({ behavior: 'smooth' });
         }
 
         async function fetchAPI() {
@@ -405,7 +415,7 @@
             }
         }
 
-        async function loadMatchDetails(matchId) {
+        async function loadMatchDetails(matchId, startTab = 'info') {
             showDetailView();
             document.getElementById('detail-header').innerHTML = '<h2>Loading Match Details...</h2>';
             document.getElementById('detail-content').innerHTML = '<div class="loader">Fetching data from API V2...</div>';
@@ -419,7 +429,7 @@
                 if (json.success && json.data) {
                     selectedMatch = json.data;
                     renderDetailHeader();
-                    switchDetailTab('info'); // Default to info
+                    switchDetailTab(startTab);
                 } else {
                     document.getElementById('detail-content').innerHTML = '<div class="loader">Match data not found in API</div>';
                 }
@@ -555,13 +565,13 @@
                         <div class="cb-match-state">${stateText}</div>
                     </div>
                     <div class="cb-match-footer">
-                        <a href="#">Live Score</a>
+                        <a href="javascript:void(0)" onclick="event.stopPropagation(); loadMatchDetails('${m.id}', 'live-detail')">Live Score</a>
                         <span>|</span>
-                        <a href="#">Scorecard</a>
+                        <a href="javascript:void(0)" onclick="event.stopPropagation(); loadMatchDetails('${m.id}', 'scorecard')">Scorecard</a>
                         <span>|</span>
-                        <a href="#">Full Commentary</a>
+                        <a href="javascript:void(0)" onclick="event.stopPropagation(); loadMatchDetails('${m.id}', 'info')">Full Commentary</a>
                         <span>|</span>
-                        <a href="#">News</a>
+                        <a href="javascript:void(0)" onclick="event.stopPropagation(); loadMatchDetails('${m.id}', 'info')">News</a>
                     </div>
                 </div>
                 `;
