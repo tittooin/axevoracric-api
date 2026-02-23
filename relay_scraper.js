@@ -43,20 +43,29 @@ async function scrapeAll() {
             if (seenIds.has(id)) continue;
             seenIds.add(id);
 
-            // Robust JSON extraction for match details
-            const chunkRegex = new RegExp(`"matchId":${id},.*?"team1":{[^}]*"teamName":"([^"]+)"},"team2":{[^}]*"teamName":"([^"]+)"}.*?"state":"([^"]+)"`);
-            const snippetMatch = chunkRegex.exec(html);
-
+            // Order-independent JSON extraction via string slicing
+            const idIndex = html.indexOf(`"matchId":${id}`);
             let teamA = 'Live Match', teamB = 'Updating...', status = 'live';
 
-            if (snippetMatch) {
-                teamA = snippetMatch[1];
-                teamB = snippetMatch[2];
-                const state = snippetMatch[3].toLowerCase();
-                if (['preview', 'upcoming', 'scheduled'].includes(state)) {
-                    status = 'scheduled';
-                } else if (['complete', 'result'].includes(state)) {
-                    status = 'completed';
+            if (idIndex !== -1) {
+                const block = html.slice(idIndex, idIndex + 1500); // Grab enough text to find elements
+
+                const t1Match = /"team1":{[^}]*"teamName":"([^"]+)"/.exec(block);
+                const t2Match = /"team2":{[^}]*"teamName":"([^"]+)"/.exec(block);
+                const stateMatch = /"state":"([^"]+)"/.exec(block);
+
+                if (t1Match) teamA = t1Match[1];
+                if (t2Match) teamB = t2Match[1];
+
+                if (stateMatch) {
+                    const state = stateMatch[1].toLowerCase();
+                    if (['preview', 'upcoming', 'scheduled'].includes(state)) {
+                        status = 'scheduled';
+                    } else if (['complete', 'result'].includes(state)) {
+                        status = 'completed';
+                    } else {
+                        status = 'live';
+                    }
                 }
             }
 
