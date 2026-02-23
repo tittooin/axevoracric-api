@@ -35,38 +35,25 @@ async function scrapeAll() {
         const html = await fetchFromUrl(url);
         if (!html) continue;
 
-        // Extract every match-like ID from links
-        const idRegex = /(?:\/live-cricket-scores\/|\/cricket-scores\/|\/live-cricket-scorecard\/|\/cricket-match\/)(\d+)/g;
-        let idMatch;
-        while ((idMatch = idRegex.exec(html)) !== null) {
-            const id = idMatch[1];
+        // Extract matches from <a title="..." href="/live-cricket-scores/..." tags
+        // Cricbuzz SPA encodes match info in the title attributes of links
+        const regex = /<a title="([^"]+?)\s+vs\s+([^"]+?),\s*(.*?)"[^>]+href="\/live-cricket-scores\/(\d+)\//g;
+        let match;
+
+        while ((match = regex.exec(html)) !== null) {
+            const teamA = match[1].trim();
+            const teamB = match[2].trim();
+            const stateDesc = match[3].trim().toLowerCase();
+            const id = match[4];
+
             if (seenIds.has(id)) continue;
             seenIds.add(id);
 
-            // Order-independent JSON extraction via string slicing
-            const idIndex = html.indexOf(`"matchId":${id}`);
-            let teamA = 'Live Match', teamB = 'Updating...', status = 'live';
-
-            if (idIndex !== -1) {
-                const block = html.slice(idIndex, idIndex + 1500); // Grab enough text to find elements
-
-                const t1Match = /"team1":{[^}]*"teamName":"([^"]+)"/.exec(block);
-                const t2Match = /"team2":{[^}]*"teamName":"([^"]+)"/.exec(block);
-                const stateMatch = /"state":"([^"]+)"/.exec(block);
-
-                if (t1Match) teamA = t1Match[1];
-                if (t2Match) teamB = t2Match[1];
-
-                if (stateMatch) {
-                    const state = stateMatch[1].toLowerCase();
-                    if (['preview', 'upcoming', 'scheduled'].includes(state)) {
-                        status = 'scheduled';
-                    } else if (['complete', 'result'].includes(state)) {
-                        status = 'completed';
-                    } else {
-                        status = 'live';
-                    }
-                }
+            let status = 'live';
+            if (stateDesc.includes('preview') || stateDesc.includes('upcoming')) {
+                status = 'scheduled';
+            } else if (stateDesc.includes('result') || stateDesc.includes('complete') || stateDesc.includes('won') || stateDesc.includes('stumps')) {
+                status = 'completed';
             }
 
             allMatches.push({
