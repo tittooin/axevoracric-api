@@ -274,8 +274,28 @@
                     <div class="cb-filter-pill">Women</div>
                 </div>
 
-                <div id="match-list">
-                    <div class="loader">Loading Matches from Axevora API...</div>
+                <div id="match-list-view">
+                    <div id="match-list">
+                        <div class="loader">Loading Matches from Axevora API...</div>
+                    </div>
+                </div>
+
+                <div id="match-detail-view" style="display: none;">
+                    <div style="margin-bottom: 20px;">
+                        <span onclick="showMainView()" style="cursor: pointer; color: #009270; font-weight: 500;">❮ Back
+                            to All Matches</span>
+                    </div>
+
+                    <div id="detail-header"></div>
+
+                    <div class="cb-subnav">
+                        <span id="tab-info" class="active" onclick="switchDetailTab('info')">Info</span>
+                        <span id="tab-live-detail" onclick="switchDetailTab('live-detail')">Live</span>
+                        <span id="tab-scorecard" onclick="switchDetailTab('scorecard')">Scorecard</span>
+                        <span id="tab-squads" onclick="switchDetailTab('squads')">Squads</span>
+                    </div>
+
+                    <div id="detail-content"></div>
                 </div>
             </div>
 
@@ -307,6 +327,7 @@
 
     <script>
         const API_URL = 'https://cricbuzz-api-v2.axevoracric.workers.dev/api/v1/all';
+        const MATCH_DETAIL_URL = 'https://cricbuzz-api-v2.axevoracric.workers.dev/api/v1/matches/get-info';
         const API_KEY = '73bd32db-4a16-4191-8a51-151309845191.c2bd71d77463aa0cc50597bea0aab326e0781d80d866f2f00e28039d0fe70091';
 
         // State
@@ -316,12 +337,31 @@
             completed: []
         };
         let currentTab = 'live';
+        let currentDetailTab = 'info';
+        let selectedMatch = null;
+
+        function showMainView() {
+            document.getElementById('match-list-view').style.display = 'block';
+            document.getElementById('match-detail-view').style.display = 'none';
+        }
+
+        function showDetailView() {
+            document.getElementById('match-list-view').style.display = 'none';
+            document.getElementById('match-detail-view').style.display = 'block';
+        }
 
         function switchTab(tab) {
             currentTab = tab;
             document.querySelectorAll('.cb-subnav span').forEach(el => el.classList.remove('active'));
             document.getElementById('tab-' + tab).classList.add('active');
             renderMatches();
+        }
+
+        function switchDetailTab(tab) {
+            currentDetailTab = tab;
+            document.querySelectorAll('#match-detail-view .cb-subnav span').forEach(el => el.classList.remove('active'));
+            document.getElementById('tab-' + tab).classList.add('active');
+            renderDetailContent();
         }
 
         async function fetchAPI() {
@@ -365,6 +405,108 @@
             }
         }
 
+        async function loadMatchDetails(matchId) {
+            showDetailView();
+            document.getElementById('detail-header').innerHTML = '<h2>Loading Match Details...</h2>';
+            document.getElementById('detail-content').innerHTML = '<div class="loader">Fetching data from API V2...</div>';
+
+            try {
+                const response = await fetch(`${MATCH_DETAIL_URL}?id=${matchId}`, {
+                    headers: { 'x-api-key': API_KEY }
+                });
+                const json = await response.json();
+
+                if (json.success && json.data) {
+                    selectedMatch = json.data;
+                    renderDetailHeader();
+                    switchDetailTab('info'); // Default to info
+                } else {
+                    document.getElementById('detail-content').innerHTML = '<div class="loader">Match data not found in API</div>';
+                }
+            } catch (e) {
+                console.error(e);
+                document.getElementById('detail-content').innerHTML = '<div class="loader">Failed to load match details</div>';
+            }
+        }
+
+        function renderDetailHeader() {
+            const m = selectedMatch;
+            document.getElementById('detail-header').innerHTML = `
+                <h1 style="font-size: 20px; margin-bottom: 8px;">${m.team_a} vs ${m.team_b}</h1>
+                <div style="font-size: 13px; color: #666; margin-bottom: 16px;">
+                    Series: Cricket Series • Venue: Stadium • Time: ${new Date(m.start_time * 1000).toLocaleString()}
+                </div>
+            `;
+        }
+
+        function renderDetailContent() {
+            const content = document.getElementById('detail-content');
+            const m = selectedMatch;
+
+            if (currentDetailTab === 'info') {
+                content.innerHTML = `
+                    <div class="cb-match-card">
+                        <div class="cb-match-header"><span>MATCH INFO</span></div>
+                        <div class="cb-match-body">
+                            <div class="cb-team-row"><strong>Match ID:</strong> <span>${m.id}</span></div>
+                            <div class="cb-team-row"><strong>Teams:</strong> <span>${m.team_a} vs ${m.team_b}</span></div>
+                            <div class="cb-team-row"><strong>Status:</strong> <span>${m.status.toUpperCase()}</span></div>
+                            <div class="cb-team-row"><strong>Source:</strong> <span>${m.source}</span></div>
+                        </div>
+                    </div>
+                `;
+            } else if (currentDetailTab === 'squads') {
+                renderSquads();
+            } else {
+                content.innerHTML = `<div class="loader">The "${currentDetailTab}" section is coming soon in the next API update!</div>`;
+            }
+        }
+
+        function renderSquads() {
+            const m = selectedMatch;
+            const content = document.getElementById('detail-content');
+
+            if (!m.squads || (!m.squads.team_a && !m.squads.team_b)) {
+                content.innerHTML = '<div class="loader">Squad data not available for this match yet.</div>';
+                return;
+            }
+
+            let html = `
+                <div style="display: flex; gap: 20px;">
+                    <div style="flex: 1;">
+                        <div class="cb-match-header" style="background: #009270; color: white;"><span>${m.team_a} Squad</span></div>
+                        <div class="cb-match-card" style="border-top: 0;">
+                            <div style="padding: 10px;">
+                                ${renderPlayerList(m.squads.team_a)}
+                            </div>
+                        </div>
+                    </div>
+                    <div style="flex: 1;">
+                        <div class="cb-match-header" style="background: #009270; color: white;"><span>${m.team_b} Squad</span></div>
+                        <div class="cb-match-card" style="border-top: 0;">
+                            <div style="padding: 10px;">
+                                ${renderPlayerList(m.squads.team_b)}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            content.innerHTML = html;
+        }
+
+        function renderPlayerList(players) {
+            if (!players || players.length === 0) return '<div style="color: #999;">No players listed</div>';
+            return players.map(p => `
+                <div style="padding: 8px; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 10px;">
+                    <div style="width: 30px; height: 30px; background: #ddd; border-radius: 50%;"></div>
+                    <div>
+                        <div style="font-size: 14px; font-weight: 500;">${p.name || p}</div>
+                        <div style="font-size: 11px; color: #777;">${p.role || 'Player'}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
         function renderMatches() {
             const listContainer = document.getElementById('match-list');
             const dataToRender = matchesData[currentTab];
@@ -386,7 +528,7 @@
                 if (m.status === 'completed') stateText = m.team_a + ' vs ' + m.team_b + ' Completed';
 
                 html += `
-                <div class="cb-match-card">
+                <div class="cb-match-card" onclick="loadMatchDetails('${m.id}')" style="cursor: pointer;">
                     <div class="cb-match-header">
                         <span>${tournamentStr}</span>
                         <span>❯</span>
