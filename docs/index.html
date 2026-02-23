@@ -354,6 +354,7 @@
             currentTab = tab;
             document.querySelectorAll('.cb-subnav span').forEach(el => el.classList.remove('active'));
             document.getElementById('tab-' + tab).classList.add('active');
+            showMainView(); // Ensure we switch back to the list view
             renderMatches();
         }
 
