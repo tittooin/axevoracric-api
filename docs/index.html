@@ -336,10 +336,12 @@
                     // Reset
                     matchesData = { live: [], scheduled: [], completed: [] };
 
-                    // The API puts all matches (live & upcoming) into json.data.live array 
-                    // and also has json.data.upcoming based on our recent changes.
                     // Let's just combine everything we received and sort them by status ourselves to be safe.
-                    const combined = [...(json.data.live || []), ...(json.data.upcoming || [])];
+                    const combined = [
+                        ...(json.data.live || []),
+                        ...(json.data.upcoming || []),
+                        ...(json.data.recent || [])
+                    ];
 
                     combined.forEach(m => {
                         if (m.status === 'live') matchesData.live.push(m);
