@@ -16,38 +16,63 @@ async function fetchCricbuzzLive() {
         });
 
         const html = await response.text();
+        console.log(`[Relay] HTML Length: ${html.length}`);
 
-        // Extracting data from hydration script chunks (Next.js __next_f logic)
-        // This is a simplified regex for the relay demo. In a full version, we'd parse all chunks.
+        // Strategy 1: Look for common match links in HTML
+        const idRegex = /\/live-cricket-scores\/(\d+)/g;
+        const foundIds = new Set();
+        let idMatch;
+        while ((idMatch = idRegex.exec(html)) !== null) {
+            foundIds.add(idMatch[1]);
+        }
+
+        console.log(`[Relay] Found match-like IDs in links: ${Array.from(foundIds).join(', ')}`);
+
+        // Strategy 2: React Chunk Regex
         const matches = [];
-
-        // Look for matchId and team names in the HTML
-        // Note: For a robust implementation, we would use a proper parser or more complex regex.
-        // For Phase 16 Handover, we'll implement a sample extraction that works with the current Cricbuzz structure.
-
-        // More flexible regex to handle Next.js streaming chunks
-        const matchRegex = /"matchId":(\d+),"seriesId":\d+,"seriesName":"([^"]+)","matchDesc":"([^"]+)","matchFormat":"([^"]+)"(?:,"startDate":"\d+")?(?:,"state":"[^"]+")?(?:,"status":"[^"]+")?,"team1":{[^}]*"teamName":"([^"]+)","teamSName":"([^"]+)"},"team2":{[^}]*"teamName":"([^"]+)","teamSName":"([^"]+)"}/g;
+        const matchRegex = /"matchId":(\d+),"seriesId":\d+,"seriesName":"([^"]+)","matchDesc":"([^"]+)","matchFormat":"([^"]+)"/g;
 
         let match;
         while ((match = matchRegex.exec(html)) !== null) {
-            const [_, id, series, desc, format, team1, team1S, team2, team2S] = match;
+            const [_, id, series, desc, format] = match;
+            if (matches.find(m => m.source_match_id === id)) continue;
 
             matches.push({
                 id: `relay:${id}`,
                 source: 'relay',
                 source_match_id: id,
-                team_a: team1,
-                team_b: team2,
-                status: 'live', // Default to live for this scraper
+                team_a: 'Live Match',
+                team_b: 'Loading...',
+                status: 'live',
                 start_time: Math.floor(Date.now() / 1000),
                 provider_updated_at: Math.floor(Date.now() / 1000),
                 squads: JSON.stringify({ team_a: [], team_b: [] }),
                 lineups: JSON.stringify({ team_a: [], team_b: [] }),
-                raw_payload: JSON.stringify({ series, desc, format, team1S, team2S })
+                raw_payload: JSON.stringify({ series, desc, format, source: 'react_chunk' })
             });
         }
 
-        console.log(`[Relay] Found ${matches.length} matches.`);
+        // Strategy 3: Link Fallback
+        if (matches.length === 0 && foundIds.size > 0) {
+            console.log(`[Relay] Falling back to link-based skeletons.`);
+            for (const id of foundIds) {
+                matches.push({
+                    id: `relay:${id}`,
+                    source: 'relay',
+                    source_match_id: id,
+                    team_a: 'Live Match',
+                    team_b: 'Updating...',
+                    status: 'live',
+                    start_time: Math.floor(Date.now() / 1000),
+                    provider_updated_at: Math.floor(Date.now() / 1000),
+                    squads: JSON.stringify({ team_a: [], team_b: [] }),
+                    lineups: JSON.stringify({ team_a: [], team_b: [] }),
+                    raw_payload: JSON.stringify({ note: "Link-based fallback", source: 'html_links' })
+                });
+            }
+        }
+
+        console.log(`[Relay] Total matches prepared for ingestion: ${matches.length}`);
         return matches;
 
     } catch (error) {
