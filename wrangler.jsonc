@@ -1,0 +1,37 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "cricbuzz-api-v2",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-02-23",
+	// "compatibility_flags": [
+	//   "nodejs_compat"
+	// ],
+	// "vars": {
+	//   "MY_VAR": "my-variable"
+	// },
+	"kv_namespaces": [
+		{
+			"binding": "USAGE_KV",
+			"id": "bc7d02ea425d4e248107d190237c9959"
+		}
+	],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "cricbuzz_d1_prod",
+			"database_id": "118ed0ed-c0c5-44ce-bae7-783876d95878"
+		}
+	],
+	// "ai": {
+	//   "binding": "AI"
+	// },
+	// "observability": {
+	//   "enabled": true,
+	//   "head_sampling_rate": 1
+	// },
+	"triggers": {
+		"crons": [
+			"*/2 * * * *"
+		]
+	}
+}
