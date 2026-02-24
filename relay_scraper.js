@@ -1,6 +1,6 @@
 /**
- * AXEVORA RELAY SCRAPER v13 (Enterprise Hardened)
- * 100% JSON-Based Extraction Logic - Resilient to Design Changes
+ * AXEVORA RELAY SCRAPER v14 (Fantasy Hardened)
+ * 100% JSON-Based Extraction Logic - Support for Fantasy Points & Playing XI
  */
 
 const INGESTION_ENDPOINT = process.env.INGESTION_ENDPOINT || 'https://cricbuzz-api-v2.axevoracric.workers.dev/api/v1/ingest/push';
@@ -46,7 +46,6 @@ async function fetchSquads(matchId) {
     if (!html) return { team_a: [], team_b: [] };
     const squads = { team_a: [], team_b: [] };
 
-    // Split by column marker
     const parts = html.split('class="w-1/2"');
     if (parts.length < 3) return squads;
 
@@ -69,10 +68,18 @@ async function fetchSquads(matchId) {
 }
 
 async function fetchDeepData(matchId) {
-    const liveDetails = { score: '', status: '', batsmen: [], bowlers: [], recent_balls: '' };
+    const liveDetails = {
+        score: '',
+        status: '',
+        batsmen: [],
+        bowlers: [],
+        recent_balls: '',
+        last_wicket: ''
+    };
     const scorecard = [];
+    const lineups = { team_a_ids: [], team_b_ids: [] };
 
-    // Summary API (Commentary + Miniscore)
+    // --- STEP 1: Comm API (for Lineups and Mini-score) ---
     const commData = await fetchJson(`https://www.cricbuzz.com/api/mcenter/comm/${matchId}`);
     if (commData && commData.miniscore) {
         const mini = commData.miniscore;
@@ -82,22 +89,63 @@ async function fetchDeepData(matchId) {
         liveDetails.status = mini.status || commData.matchHeader?.status || '';
 
         if (mini.batsmanStriker) {
-            liveDetails.batsmen.push({ name: mini.batsmanStriker.name, runs: String(mini.batsmanStriker.runs || '0'), balls: String(mini.batsmanStriker.balls || '0') });
+            liveDetails.batsmen.push({
+                name: mini.batsmanStriker.name,
+                runs: String(mini.batsmanStriker.runs || '0'),
+                balls: String(mini.batsmanStriker.balls || '0'),
+                fours: String(mini.batsmanStriker.fours || '0'),
+                sixes: String(mini.batsmanStriker.sixes || '0')
+            });
         }
         if (mini.batsmanNonStriker) {
-            liveDetails.batsmen.push({ name: mini.batsmanNonStriker.name, runs: String(mini.batsmanNonStriker.runs || '0'), balls: String(mini.batsmanNonStriker.balls || '0') });
+            liveDetails.batsmen.push({
+                name: mini.batsmanNonStriker.name,
+                runs: String(mini.batsmanNonStriker.runs || '0'),
+                balls: String(mini.batsmanNonStriker.balls || '0'),
+                fours: String(mini.batsmanNonStriker.fours || '0'),
+                sixes: String(mini.batsmanNonStriker.sixes || '0')
+            });
         }
     }
 
-    // Full Scorecard API
+    // --- STEP 2: Scorecard API (Full Details & Stats) ---
     const scData = await fetchJson(`https://www.cricbuzz.com/api/mcenter/scorecard/${matchId}`);
     if (scData && scData.scoreCard && Array.isArray(scData.scoreCard)) {
         scData.scoreCard.forEach(inn => {
-            const inning = { name: (inn.batTeamDetails?.batTeamName || 'Unknown') + ' Innings', batters: [] };
+            const inning = {
+                name: (inn.batTeamDetails?.batTeamName || 'Unknown') + ' Innings',
+                batters: [],
+                bowlers: [],
+                extras: inn.extrasData?.total || '0'
+            };
+
+            // Batsmen Data
             if (inn.batTeamDetails?.batsmenData) {
-                const bats = inn.batTeamDetails.batsmenData;
-                Object.values(bats).forEach(b => {
-                    inning.batters.push({ name: b.batName, dismissal: b.outDesc || 'not out', runs: String(b.runs || '0'), balls: String(b.balls || '0') });
+                Object.values(inn.batTeamDetails.batsmenData).forEach(b => {
+                    inning.batters.push({
+                        name: b.batName,
+                        dismissal: b.outDesc || 'not out',
+                        runs: String(b.runs || '0'),
+                        balls: String(b.balls || '0'),
+                        fours: String(b.fours || '0'),
+                        sixes: String(b.sixes || '0'),
+                        sr: String(b.strikeRate || '0.0'),
+                        wicketCode: b.wicketCode || ''
+                    });
+                });
+            }
+
+            // Bowlers Data
+            if (inn.bowlTeamDetails?.bowlersData) {
+                Object.values(inn.bowlTeamDetails.bowlersData).forEach(bo => {
+                    inning.bowlers.push({
+                        name: bo.bowlName,
+                        overs: String(bo.overs || '0'),
+                        maidens: String(bo.maidens || '0'),
+                        runs: String(bo.runs || '0'),
+                        wickets: String(bo.wickets || '0'),
+                        eco: String(bo.economy || '0.0')
+                    });
                 });
             }
             scorecard.push(inning);
@@ -115,8 +163,6 @@ async function scrapeAll() {
         const html = await fetchFromUrl(url);
         if (!html) continue;
 
-        // ROBUST EXTRACTION: Use JSON-like artifacts in <script> tags instead of <a> title
-        // Pattern matches escaped matchId, team1/team2 objects in Next.js state chunks
         const scriptPatterns = [
             /matchId\\":(\d+),.*?team1\\":\{.*?teamName\\":\\"(.*?)\\",.*?team2\\":\{.*?teamName\\":\\"(.*?)\\"/g,
             /matchId":(\d+),.*?"team1":\{.*?"teamName":"(.*?)",.*?"team2":\{.*?"teamName":"(.*?)"/g
@@ -132,7 +178,6 @@ async function scrapeAll() {
 
                 const teamA = match[2].replace(/\\/g, '').trim();
                 const teamB = match[3].replace(/\\/g, '').trim();
-
                 let status = url.includes('upcoming') ? 'scheduled' : 'live';
 
                 allMatches.push({
@@ -145,6 +190,7 @@ async function scrapeAll() {
                     start_time: Math.floor(Date.now() / 1000),
                     provider_updated_at: Math.floor(Date.now() / 1000),
                     squads: { team_a: [], team_b: [] },
+                    lineups: { team_a: [], team_b: [] },
                     live_details: {},
                     scorecard: []
                 });
@@ -158,14 +204,29 @@ async function scrapeAll() {
     for (let i = 0; i < Math.min(allMatches.length, 15); i++) {
         const m = allMatches[i];
         m.squads = await fetchSquads(m.source_match_id);
+
         if (i < 5) {
             const deep = await fetchDeepData(m.source_match_id);
             m.live_details = deep.liveDetails;
             m.scorecard = deep.scorecard;
-        }
-        // Force status 'completed' if scorecard has 2+ innings and no current score
-        if (m.scorecard.length >= 2 && !m.live_details.score) {
-            m.status = 'completed';
+
+            // Inferred Lineups from Scorecard (Confirmed players)
+            const playedA = new Set();
+            const playedB = new Set();
+            m.scorecard.forEach(inn => {
+                const isTeamAInnings = inn.name.includes(m.team_a);
+                inn.batters.forEach(b => (isTeamAInnings ? playedA : playedB).add(b.name));
+                inn.bowlers.forEach(bo => (isTeamAInnings ? playedB : playedA).add(bo.name));
+            });
+            m.lineups = {
+                team_a: Array.from(playedA).map(name => ({ name, status: 'In' })),
+                team_b: Array.from(playedB).map(name => ({ name, status: 'In' }))
+            };
+
+            // Force status 'completed' if scorecard has 2+ innings and match header says result
+            if (m.scorecard.length >= 2 && m.live_details.status.toLowerCase().includes('won')) {
+                m.status = 'completed';
+            }
         }
     }
 
@@ -176,10 +237,7 @@ async function scrapeAll() {
 async function run() {
     console.log(`[Relay] Starting scrape...`);
     const matches = await scrapeAll();
-    if (matches.length === 0) {
-        console.log(`[Relay] No matches found. Check patterns.`);
-        return;
-    }
+    if (matches.length === 0) return;
 
     try {
         const response = await fetch(INGESTION_ENDPOINT, {
