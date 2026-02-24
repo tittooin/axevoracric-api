@@ -1,6 +1,6 @@
 /**
- * AXEVORA RELAY SCRAPER v14 (Fantasy Hardened)
- * 100% JSON-Based Extraction Logic - Support for Fantasy Points & Playing XI
+ * AXEVORA RELAY SCRAPER v15 (Industrial Grade)
+ * 100% JSON-Based Extraction Logic - Support for Stable IDs & Structured Fielding
  */
 
 const INGESTION_ENDPOINT = process.env.INGESTION_ENDPOINT || 'https://cricbuzz-api-v2.axevoracric.workers.dev/api/v1/ingest/push';
@@ -46,18 +46,22 @@ async function fetchSquads(matchId) {
     if (!html) return { team_a: [], team_b: [] };
     const squads = { team_a: [], team_b: [] };
 
+    // Split by column marker
     const parts = html.split('class="w-1/2"');
     if (parts.length < 3) return squads;
 
     const extractPlayers = (segment) => {
         const players = [];
-        const playerRegex = /<span>([^<]+)<\/span>[\s\S]*?<div class="text-cbTxtSec text-xs">([^<]+)<\/div>/g;
+        // Note: Squads page is still HTML, but we try to find IDs in links if possible
+        // <a href="/profiles/10012/smriti-mandhana">...</a>
+        const playerRegex = /<a[^>]+href="\/profiles\/(\d+)\/[^"]+"[^>]*>([\s\S]*?)<\/a>.*?<div class="text-cbTxtSec text-xs">([^<]+)<\/div>/g;
         let p;
         while ((p = playerRegex.exec(segment)) !== null) {
-            const name = p[1].trim();
-            const role = p[2].trim();
-            if (name.length > 2 && name.length < 40 && !name.includes('(')) {
-                players.push({ name, role });
+            const id = p[1];
+            const name = p[2].replace(/<[^>]+>/g, '').trim();
+            const role = p[3].trim();
+            if (name.length > 2 && name.length < 40) {
+                players.push({ id, name, role });
             }
         }
         return players;
@@ -77,9 +81,8 @@ async function fetchDeepData(matchId) {
         last_wicket: ''
     };
     const scorecard = [];
-    const lineups = { team_a_ids: [], team_b_ids: [] };
 
-    // --- STEP 1: Comm API (for Lineups and Mini-score) ---
+    // --- STEP 1: Comm API ---
     const commData = await fetchJson(`https://www.cricbuzz.com/api/mcenter/comm/${matchId}`);
     if (commData && commData.miniscore) {
         const mini = commData.miniscore;
@@ -90,6 +93,7 @@ async function fetchDeepData(matchId) {
 
         if (mini.batsmanStriker) {
             liveDetails.batsmen.push({
+                id: String(mini.batsmanStriker.id),
                 name: mini.batsmanStriker.name,
                 runs: String(mini.batsmanStriker.runs || '0'),
                 balls: String(mini.batsmanStriker.balls || '0'),
@@ -99,6 +103,7 @@ async function fetchDeepData(matchId) {
         }
         if (mini.batsmanNonStriker) {
             liveDetails.batsmen.push({
+                id: String(mini.batsmanNonStriker.id),
                 name: mini.batsmanNonStriker.name,
                 runs: String(mini.batsmanNonStriker.runs || '0'),
                 balls: String(mini.batsmanNonStriker.balls || '0'),
@@ -108,7 +113,7 @@ async function fetchDeepData(matchId) {
         }
     }
 
-    // --- STEP 2: Scorecard API (Full Details & Stats) ---
+    // --- STEP 2: Scorecard API (Structured Fielding & Stable IDs) ---
     const scData = await fetchJson(`https://www.cricbuzz.com/api/mcenter/scorecard/${matchId}`);
     if (scData && scData.scoreCard && Array.isArray(scData.scoreCard)) {
         scData.scoreCard.forEach(inn => {
@@ -123,6 +128,7 @@ async function fetchDeepData(matchId) {
             if (inn.batTeamDetails?.batsmenData) {
                 Object.values(inn.batTeamDetails.batsmenData).forEach(b => {
                     inning.batters.push({
+                        id: String(b.batId),
                         name: b.batName,
                         dismissal: b.outDesc || 'not out',
                         runs: String(b.runs || '0'),
@@ -130,7 +136,10 @@ async function fetchDeepData(matchId) {
                         fours: String(b.fours || '0'),
                         sixes: String(b.sixes || '0'),
                         sr: String(b.strikeRate || '0.0'),
-                        wicketCode: b.wicketCode || ''
+                        wicketCode: b.wicketCode || '',
+                        bowlerId: String(b.bowlerId || '0'),
+                        fielderId1: String(b.fielderId1 || '0'),
+                        fielderId2: String(b.fielderId2 || '0')
                     });
                 });
             }
@@ -139,6 +148,7 @@ async function fetchDeepData(matchId) {
             if (inn.bowlTeamDetails?.bowlersData) {
                 Object.values(inn.bowlTeamDetails.bowlersData).forEach(bo => {
                     inning.bowlers.push({
+                        id: String(bo.bowlId),
                         name: bo.bowlName,
                         overs: String(bo.overs || '0'),
                         maidens: String(bo.maidens || '0'),
@@ -200,30 +210,29 @@ async function scrapeAll() {
         console.log(`[Relay] Discovered ${foundCount} matches from ${url}`);
     }
 
-    // Now fetch deep data for top 5 matches
     for (let i = 0; i < Math.min(allMatches.length, 15); i++) {
         const m = allMatches[i];
         m.squads = await fetchSquads(m.source_match_id);
 
-        if (i < 5) {
+        if (i < 15) { // Increased skip count to 15 to ensure most matches have squads/IDs
             const deep = await fetchDeepData(m.source_match_id);
             m.live_details = deep.liveDetails;
             m.scorecard = deep.scorecard;
 
-            // Inferred Lineups from Scorecard (Confirmed players)
-            const playedA = new Set();
-            const playedB = new Set();
+            // Inferred Lineups with IDs
+            const playedA = new Map();
+            const playedB = new Map();
             m.scorecard.forEach(inn => {
                 const isTeamAInnings = inn.name.includes(m.team_a);
-                inn.batters.forEach(b => (isTeamAInnings ? playedA : playedB).add(b.name));
-                inn.bowlers.forEach(bo => (isTeamAInnings ? playedB : playedA).add(bo.name));
+                inn.batters.forEach(b => (isTeamAInnings ? playedA : playedB).set(b.id, b.name));
+                inn.bowlers.forEach(bo => (isTeamAInnings ? playedB : playedA).set(bo.id, bo.name));
             });
+
             m.lineups = {
-                team_a: Array.from(playedA).map(name => ({ name, status: 'In' })),
-                team_b: Array.from(playedB).map(name => ({ name, status: 'In' }))
+                team_a: Array.from(playedA.entries()).map(([id, name]) => ({ id, name, status: 'In' })),
+                team_b: Array.from(playedB.entries()).map(([id, name]) => ({ id, name, status: 'In' }))
             };
 
-            // Force status 'completed' if scorecard has 2+ innings and match header says result
             if (m.scorecard.length >= 2 && m.live_details.status.toLowerCase().includes('won')) {
                 m.status = 'completed';
             }
