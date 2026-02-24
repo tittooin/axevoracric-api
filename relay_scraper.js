@@ -1,6 +1,6 @@
 /**
- * AXEVORA RELAY SCRAPER v21 (Elite Visuals & Logic)
- * Robust Squad Extraction - Handles Reversals, Truncation, and Nested Image IDs.
+ * AXEVORA RELAY SCRAPER v23 (Elite Squad Fix v2.1)
+ * Surgical JSON splitting to resolve team overlap and staff inclusion.
  */
 
 const INGESTION_ENDPOINT = process.env.INGESTION_ENDPOINT || 'https://cricbuzz-api-v2.axevoracric.workers.dev/api/v1/ingest/push';
@@ -32,67 +32,69 @@ async function fetchSquads(matchId) {
     const html = await fetchFromUrl(url);
     if (!html) return { team1: { name: '', players: [] }, team2: { name: '', players: [] } };
 
-    const clean = html.replace(/\\/g, '');
-
-    // Find all player objects
-    const pRegex = /"id":(\d+),"name":"([^"]+)"/g;
-    const allPlayersMap = new Map();
-    let p;
-    while ((p = pRegex.exec(clean)) !== null) {
-        const id = p[1];
-        const name = p[2];
-        const window = clean.substring(p.index, p.index + 2000);
-
-        const roleMatch = window.match(/"role":"([^"]+)"/);
-        const imgMatch = window.match(/"imageId":(\d+)/);
-
-        allPlayersMap.set(id, {
-            id,
-            name,
-            role: roleMatch ? roleMatch[1] : '',
-            imgId: imgMatch ? imgMatch[1] : id,
-            index: p.index
-        });
+    // Combine hydration chunks
+    const pushRegex = /self\.__next_f\.push\(\[\d+,\"([^\"]*)\"\]\)/g;
+    let combined = "";
+    let m;
+    while ((m = pushRegex.exec(html)) !== null) {
+        combined += m[1];
     }
+    const clean = combined.replace(/\\/g, '');
 
-    // Find Team definitions
+    const extractPlayers = (block) => {
+        const players = [];
+        // Only look at "playing XI" and "bench" - stop before "support staff"
+        const p1 = block.indexOf('"playing XI":');
+        const p2 = block.indexOf('"bench":');
+        const pStaff = block.indexOf('"support staff":');
+
+        let pool = "";
+        if (pStaff !== -1) {
+            pool = block.substring(0, pStaff);
+        } else {
+            pool = block;
+        }
+
+        const pRegex = /"id":(\d+),"name":"([^"]+)"/g;
+        let p;
+        while ((p = pRegex.exec(pool)) !== null) {
+            const id = p[1];
+            const name = p[2];
+            const window = pool.substring(p.index, p.index + 2000);
+            const imgMatch = window.match(/"imageId":(\d+)/);
+            const roleMatch = window.match(/"role":"([^"]+)"/);
+
+            players.push({
+                id,
+                name,
+                role: roleMatch ? roleMatch[1] : '',
+                imgId: imgMatch ? imgMatch[1] : id
+            });
+        }
+        return players;
+    };
+
     const t1Idx = clean.indexOf('"team1"');
     const t2Idx = clean.indexOf('"team2"');
-    const nameRegex = /"teamName":"([^"]+)"/g;
-    const names = [];
-    let n;
-    while ((n = nameRegex.exec(clean)) !== null) names.push(n[1]);
 
-    const res = {
-        team1: { name: names[0] || '', players: [] },
-        team2: { name: names[1] || '', players: [] }
-    };
+    const res = { team1: { name: '', players: [] }, team2: { name: '', players: [] } };
 
     if (t1Idx !== -1 && t2Idx !== -1) {
-        const first = t1Idx < t2Idx ? { label: 'team1', idx: t1Idx } : { label: 'team2', idx: t2Idx };
-        const second = t1Idx < t2Idx ? { label: 'team2', idx: t2Idx } : { label: 'team1', idx: t1Idx };
+        const t1Block = clean.substring(t1Idx, t2Idx);
+        const t2Block = clean.substring(t2Idx);
 
-        allPlayersMap.forEach(player => {
-            if (player.index > first.idx && player.index < second.idx) {
-                res[first.label].players.push(player);
-            } else if (player.index > second.idx) {
-                res[second.label].players.push(player);
-            }
-        });
+        const n1 = t1Block.match(/"teamName":"([^"]+)"/);
+        const n2 = t2Block.match(/"teamName":"([^"]+)"/);
+        res.team1.name = n1 ? n1[1] : '';
+        res.team2.name = n2 ? n2[1] : '';
+
+        // Extract using sub-markers for "players"
+        const p1Start = t1Block.indexOf('"players":{');
+        const p2Start = t2Block.indexOf('"players":{');
+
+        if (p1Start !== -1) res.team1.players = extractPlayers(t1Block.substring(p1Start));
+        if (p2Start !== -1) res.team2.players = extractPlayers(t2Block.substring(p2Start));
     }
-
-    // De-dupe
-    const dedupe = (list) => {
-        const seen = new Set();
-        return list.filter(p => {
-            if (seen.has(p.id)) return false;
-            seen.add(p.id);
-            return true;
-        });
-    };
-
-    res.team1.players = dedupe(res.team1.players);
-    res.team2.players = dedupe(res.team2.players);
 
     return res;
 }
@@ -144,8 +146,6 @@ async function scrapeAll() {
         const m = allMatches[i];
         try {
             const squadData = await fetchSquads(m.source_match_id);
-
-            // ELITE MAPPING: Check name to prevent swap
             const t1Name = squadData.team1.name.toLowerCase();
             const mA_Name = m.team_a.toLowerCase();
 
@@ -157,10 +157,6 @@ async function scrapeAll() {
                 m.squads.team_b = squadData.team1.players;
             }
 
-            // Fallback for missing team images from list page
-            if (!m.team_a_img && squadData.team1.imgId) m.team_a_img = squadData.team1.imgId;
-
-            // Fetch Live Details
             const scData = await fetchJson(`https://www.cricbuzz.com/api/mcenter/scorecard/${m.source_match_id}`);
             const commData = await fetchJson(`https://www.cricbuzz.com/api/mcenter/comm/${m.source_match_id}`);
 
@@ -202,7 +198,7 @@ async function scrapeAll() {
 }
 
 async function run() {
-    console.log(`[Relay] Starting scrape v21...`);
+    console.log(`[Relay] Starting scrape v23...`);
     try {
         const matches = await scrapeAll();
         if (matches.length === 0) return;
