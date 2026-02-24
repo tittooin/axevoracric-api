@@ -468,9 +468,90 @@
                 `;
             } else if (currentDetailTab === 'squads') {
                 renderSquads();
+            } else if (currentDetailTab === 'live-detail') {
+                renderLiveDetail();
+            } else if (currentDetailTab === 'scorecard') {
+                renderScorecard();
             } else {
-                content.innerHTML = `<div class="loader">The "${currentDetailTab}" section is coming soon in the next API update!</div>`;
+                content.innerHTML = `<div class="loader">The "${currentDetailTab}" section is coming soon!</div>`;
             }
+        }
+
+        function renderLiveDetail() {
+            const m = selectedMatch;
+            const content = document.getElementById('detail-content');
+            const d = m.live_details || {};
+
+            if (!d.score && !d.status) {
+                content.innerHTML = '<div class="loader">Live stats not available yet.</div>';
+                return;
+            }
+
+            content.innerHTML = `
+                <div class="cb-match-card">
+                    <div class="cb-match-header" style="background: #2c3e50; color: white;"><span>LIVE SUMMARY</span></div>
+                    <div class="cb-match-body">
+                        <div style="font-size: 24px; font-weight: bold; margin-bottom: 5px;">${d.score || 'No Score Available'}</div>
+                        <div style="color: #d35400; font-weight: 500; margin-bottom: 15px;">${d.status || m.status}</div>
+                        
+                        <div class="cb-match-header"><span>BATSMEN</span></div>
+                        <table style="width: 100%; margin-bottom: 15px; border-collapse: collapse;">
+                            <tr style="color: #777; font-size: 12px; border-bottom: 1px solid #eee;">
+                                <th style="text-align: left; padding: 5px;">Batter</th>
+                                <th style="text-align: right; padding: 5px;">R</th>
+                                <th style="text-align: right; padding: 5px;">B</th>
+                            </tr>
+                            ${(d.batsmen || []).map(b => `
+                                <tr style="border-bottom: 1px solid #f9f9f9;">
+                                    <td style="padding: 8px 5px; font-weight: 500;">${b.name}*</td>
+                                    <td style="text-align: right; padding: 5px;">${b.runs}</td>
+                                    <td style="text-align: right; padding: 5px;">${b.balls}</td>
+                                </tr>
+                            `).join('')}
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderScorecard() {
+            const m = selectedMatch;
+            const content = document.getElementById('detail-content');
+            const scorecard = m.scorecard || [];
+
+            if (!scorecard || scorecard.length === 0) {
+                content.innerHTML = '<div class="loader">Detailed scorecard not available for this match.</div>';
+                return;
+            }
+
+            let html = '';
+            scorecard.forEach(inning => {
+                html += `
+                    <div class="cb-match-card" style="margin-bottom: 20px;">
+                        <div class="cb-match-header"><span>${inning.name}</span></div>
+                        <div class="cb-match-body" style="padding: 0;">
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <tr style="background: #f8f9fa; color: #777; font-size: 11px;">
+                                    <th style="text-align: left; padding: 10px;">Batter</th>
+                                    <th style="padding: 10px;">R</th>
+                                    <th style="padding: 10px;">B</th>
+                                </tr>
+                                ${inning.batters.map(b => `
+                                    <tr style="border-bottom: 1px solid #eee;">
+                                        <td style="padding: 10px;">
+                                            <div style="font-weight: 500; color: #007bff;">${b.name}</div>
+                                            <div style="font-size: 11px; color: #999;">${b.dismissal}</div>
+                                        </td>
+                                        <td style="text-align: center; font-weight: bold;">${b.runs}</td>
+                                        <td style="text-align: center; color: #777;">${b.balls || '-'}</td>
+                                    </tr>
+                                `).join('')}
+                            </table>
+                        </div>
+                    </div>
+                `;
+            });
+            content.innerHTML = html;
         }
 
         function renderSquads() {
