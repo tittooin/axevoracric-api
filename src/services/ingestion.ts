@@ -29,14 +29,16 @@ export async function ingestMatches(
             statements.push(
                 db.prepare(`
             INSERT INTO matches (
-                id, source, source_match_id, team_a, team_b, status, start_time, 
+                id, source, source_match_id, team_a, team_a_img, team_b, team_b_img, status, start_time, 
                 last_updated, raw_payload, provider_updated_at, ingested_at, source_priority,
                 squads, lineups, scorecard, live_details
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source, source_match_id) DO UPDATE SET
               team_a = excluded.team_a,
+              team_a_img = excluded.team_a_img,
               team_b = excluded.team_b,
+              team_b_img = excluded.team_b_img,
               status = excluded.status,
               start_time = excluded.start_time,
               last_updated = excluded.last_updated,
@@ -73,7 +75,9 @@ export async function ingestMatches(
                     match.source,
                     match.source_match_id,
                     match.team_a,
+                    match.team_a_img,
                     match.team_b,
+                    match.team_b_img,
                     match.status,
                     match.start_time,
                     now,

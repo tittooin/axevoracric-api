@@ -1,6 +1,6 @@
 /**
- * AXEVORA RELAY SCRAPER v15 (Industrial Grade)
- * 100% JSON-Based Extraction Logic - Support for Stable IDs & Structured Fielding
+ * AXEVORA RELAY SCRAPER v18 (Visual Recovery)
+ * Loose Regex Ingestion - Fallback Strategy for Missing Images
  */
 
 const INGESTION_ENDPOINT = process.env.INGESTION_ENDPOINT || 'https://cricbuzz-api-v2.axevoracric.workers.dev/api/v1/ingest/push';
@@ -15,154 +15,11 @@ async function fetchFromUrl(url) {
     try {
         const response = await fetch(url, {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
             }
         });
         return await response.text();
-    } catch (e) {
-        return '';
-    }
-}
-
-async function fetchJson(url) {
-    try {
-        const response = await fetch(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                'Accept': 'application/json'
-            }
-        });
-        if (!response.ok) return null;
-        return await response.json();
-    } catch (e) {
-        return null;
-    }
-}
-
-async function fetchSquads(matchId) {
-    const url = `https://www.cricbuzz.com/cricket-match-squads/${matchId}`;
-    const html = await fetchFromUrl(url);
-    if (!html) return { team_a: [], team_b: [] };
-    const squads = { team_a: [], team_b: [] };
-
-    // Split by column marker
-    const parts = html.split('class="w-1/2"');
-    if (parts.length < 3) return squads;
-
-    const extractPlayers = (segment) => {
-        const players = [];
-        // Note: Squads page is still HTML, but we try to find IDs in links if possible
-        // <a href="/profiles/10012/smriti-mandhana">...</a>
-        const playerRegex = /<a[^>]+href="\/profiles\/(\d+)\/[^"]+"[^>]*>([\s\S]*?)<\/a>.*?<div class="text-cbTxtSec text-xs">([^<]+)<\/div>/g;
-        let p;
-        while ((p = playerRegex.exec(segment)) !== null) {
-            const id = p[1];
-            const name = p[2].replace(/<[^>]+>/g, '').trim();
-            const role = p[3].trim();
-            if (name.length > 2 && name.length < 40) {
-                players.push({ id, name, role });
-            }
-        }
-        return players;
-    };
-    squads.team_a = extractPlayers(parts[1]);
-    squads.team_b = extractPlayers(parts[2]);
-    return squads;
-}
-
-async function fetchDeepData(matchId) {
-    const liveDetails = {
-        score: '',
-        status: '',
-        batsmen: [],
-        bowlers: [],
-        recent_balls: '',
-        last_wicket: ''
-    };
-    const scorecard = [];
-
-    // --- STEP 1: Comm API ---
-    const commData = await fetchJson(`https://www.cricbuzz.com/api/mcenter/comm/${matchId}`);
-    if (commData && commData.miniscore) {
-        const mini = commData.miniscore;
-        const batTeamShort = mini.batTeamShortName || (commData.matchHeader?.team1?.id === mini.batTeam?.teamId ? commData.matchHeader.team1.shortName : commData.matchHeader?.team2?.shortName) || 'Team';
-
-        liveDetails.score = `${batTeamShort || ''} ${mini.batTeam?.teamScore || '0'}-${mini.batTeam?.teamWkts || '0'} (${mini.overs || mini.bowlerStriker?.overs || ''})`.replace(/\s+/g, ' ').trim();
-        liveDetails.status = mini.status || commData.matchHeader?.status || '';
-
-        if (mini.batsmanStriker) {
-            liveDetails.batsmen.push({
-                id: String(mini.batsmanStriker.id),
-                name: mini.batsmanStriker.name,
-                runs: String(mini.batsmanStriker.runs || '0'),
-                balls: String(mini.batsmanStriker.balls || '0'),
-                fours: String(mini.batsmanStriker.fours || '0'),
-                sixes: String(mini.batsmanStriker.sixes || '0')
-            });
-        }
-        if (mini.batsmanNonStriker) {
-            liveDetails.batsmen.push({
-                id: String(mini.batsmanNonStriker.id),
-                name: mini.batsmanNonStriker.name,
-                runs: String(mini.batsmanNonStriker.runs || '0'),
-                balls: String(mini.batsmanNonStriker.balls || '0'),
-                fours: String(mini.batsmanNonStriker.fours || '0'),
-                sixes: String(mini.batsmanNonStriker.sixes || '0')
-            });
-        }
-    }
-
-    // --- STEP 2: Scorecard API (Structured Fielding & Stable IDs) ---
-    const scData = await fetchJson(`https://www.cricbuzz.com/api/mcenter/scorecard/${matchId}`);
-    if (scData && scData.scoreCard && Array.isArray(scData.scoreCard)) {
-        scData.scoreCard.forEach(inn => {
-            const inning = {
-                name: (inn.batTeamDetails?.batTeamName || 'Unknown') + ' Innings',
-                batters: [],
-                bowlers: [],
-                extras: inn.extrasData?.total || '0'
-            };
-
-            // Batsmen Data
-            if (inn.batTeamDetails?.batsmenData) {
-                Object.values(inn.batTeamDetails.batsmenData).forEach(b => {
-                    inning.batters.push({
-                        id: String(b.batId),
-                        name: b.batName,
-                        dismissal: b.outDesc || 'not out',
-                        runs: String(b.runs || '0'),
-                        balls: String(b.balls || '0'),
-                        fours: String(b.fours || '0'),
-                        sixes: String(b.sixes || '0'),
-                        sr: String(b.strikeRate || '0.0'),
-                        wicketCode: b.wicketCode || '',
-                        bowlerId: String(b.bowlerId || '0'),
-                        fielderId1: String(b.fielderId1 || '0'),
-                        fielderId2: String(b.fielderId2 || '0')
-                    });
-                });
-            }
-
-            // Bowlers Data
-            if (inn.bowlTeamDetails?.bowlersData) {
-                Object.values(inn.bowlTeamDetails.bowlersData).forEach(bo => {
-                    inning.bowlers.push({
-                        id: String(bo.bowlId),
-                        name: bo.bowlName,
-                        overs: String(bo.overs || '0'),
-                        maidens: String(bo.maidens || '0'),
-                        runs: String(bo.runs || '0'),
-                        wickets: String(bo.wickets || '0'),
-                        eco: String(bo.economy || '0.0')
-                    });
-                });
-            }
-            scorecard.push(inning);
-        });
-    }
-
-    return { liveDetails, scorecard };
+    } catch (e) { return ''; }
 }
 
 async function scrapeAll() {
@@ -173,30 +30,33 @@ async function scrapeAll() {
         const html = await fetchFromUrl(url);
         if (!html) continue;
 
-        const scriptPatterns = [
-            /matchId\\":(\d+),.*?team1\\":\{.*?teamName\\":\\"(.*?)\\",.*?team2\\":\{.*?teamName\\":\\"(.*?)\\"/g,
-            /matchId":(\d+),.*?"team1":\{.*?"teamName":"(.*?)",.*?"team2":\{.*?"teamName":"(.*?)"/g
-        ];
+        // LOOSE REGEX: Just find Match IDs and nearby Team data
+        const matchRegex = /matchId\\?":(\d+)/g;
+        let m;
+        while ((m = matchRegex.exec(html)) !== null) {
+            const id = m[1];
+            if (seenIds.has(id)) continue;
+            seenIds.add(id);
 
-        let foundCount = 0;
-        for (const pattern of scriptPatterns) {
-            let match;
-            while ((match = pattern.exec(html)) !== null) {
-                const id = match[1];
-                if (seenIds.has(id)) continue;
-                seenIds.add(id);
+            // Extract a window of text around the matchId
+            const window = html.substring(m.index, m.index + 2000);
 
-                const teamA = match[2].replace(/\\/g, '').trim();
-                const teamB = match[3].replace(/\\/g, '').trim();
-                let status = url.includes('upcoming') ? 'scheduled' : 'live';
+            const teamARegex = /team1\\?":{.*?teamName\\?":\\?"(.*?)\\?".*?imageId\\?":(\d+)/;
+            const teamBRegex = /team2\\?":{.*?teamName\\?":\\?"(.*?)\\?".*?imageId\\?":(\d+)/;
 
+            const tA = window.match(teamARegex) || [];
+            const tB = window.match(teamBRegex) || [];
+
+            if (tA[1] || tB[1]) {
                 allMatches.push({
                     id: `relay:${id}`,
                     source: 'relay',
                     source_match_id: id,
-                    team_a: teamA,
-                    team_b: teamB,
-                    status: status,
+                    team_a: (tA[1] || 'TBA').replace(/\\/g, ''),
+                    team_a_img: tA[2] || '',
+                    team_b: (tB[1] || 'TBA').replace(/\\/g, ''),
+                    team_b_img: tB[2] || '',
+                    status: url.includes('upcoming') ? 'scheduled' : 'live',
                     start_time: Math.floor(Date.now() / 1000),
                     provider_updated_at: Math.floor(Date.now() / 1000),
                     squads: { team_a: [], team_b: [] },
@@ -204,37 +64,6 @@ async function scrapeAll() {
                     live_details: {},
                     scorecard: []
                 });
-                foundCount++;
-            }
-        }
-        console.log(`[Relay] Discovered ${foundCount} matches from ${url}`);
-    }
-
-    for (let i = 0; i < Math.min(allMatches.length, 15); i++) {
-        const m = allMatches[i];
-        m.squads = await fetchSquads(m.source_match_id);
-
-        if (i < 15) { // Increased skip count to 15 to ensure most matches have squads/IDs
-            const deep = await fetchDeepData(m.source_match_id);
-            m.live_details = deep.liveDetails;
-            m.scorecard = deep.scorecard;
-
-            // Inferred Lineups with IDs
-            const playedA = new Map();
-            const playedB = new Map();
-            m.scorecard.forEach(inn => {
-                const isTeamAInnings = inn.name.includes(m.team_a);
-                inn.batters.forEach(b => (isTeamAInnings ? playedA : playedB).set(b.id, b.name));
-                inn.bowlers.forEach(bo => (isTeamAInnings ? playedB : playedA).set(bo.id, bo.name));
-            });
-
-            m.lineups = {
-                team_a: Array.from(playedA.entries()).map(([id, name]) => ({ id, name, status: 'In' })),
-                team_b: Array.from(playedB.entries()).map(([id, name]) => ({ id, name, status: 'In' }))
-            };
-
-            if (m.scorecard.length >= 2 && m.live_details.status.toLowerCase().includes('won')) {
-                m.status = 'completed';
             }
         }
     }
@@ -244,9 +73,12 @@ async function scrapeAll() {
 }
 
 async function run() {
-    console.log(`[Relay] Starting scrape...`);
+    console.log(`[Relay] Starting scrape v18...`);
     const matches = await scrapeAll();
-    if (matches.length === 0) return;
+    if (matches.length === 0) {
+        console.log('[Relay] No matches found. Check regex.');
+        return;
+    }
 
     try {
         const response = await fetch(INGESTION_ENDPOINT, {

@@ -11,7 +11,9 @@ export interface NormalizedMatch {
     source: string;
     source_match_id: string;
     team_a: string;
+    team_a_img?: string; // imageId
     team_b: string;
+    team_b_img?: string; // imageId
     status: MatchStatus;
     start_time: number; // UTC timestamp
     provider_updated_at: number; // UTC timestamp from source
@@ -87,7 +89,9 @@ export function normalizeMatch(raw: any, source: string): NormalizedMatch {
             source: source,
             source_match_id: String(raw.match_id || raw.id),
             team_a: raw.team_a || raw.t1_name || 'TBA',
+            team_a_img: String(raw.team_a_img || raw.t1_img || ''),
             team_b: raw.team_b || raw.t2_name || 'TBA',
+            team_b_img: String(raw.team_b_img || raw.t2_img || ''),
             status: mapStatus(raw.status || raw.state || raw.match_status),
             start_time: raw.start_time || raw.timestamp || (raw.start_at ? Math.floor(new Date(raw.start_at).getTime() / 1000) : 0),
             provider_updated_at: raw.provider_updated_at || raw.last_push_ts || now,

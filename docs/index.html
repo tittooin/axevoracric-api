@@ -330,6 +330,17 @@
         const MATCH_DETAIL_URL = 'https://cricbuzz-api-v2.axevoracric.workers.dev/api/v1/matches/get-info';
         const API_KEY = '73bd32db-4a16-4191-8a51-151309845191.c2bd71d77463aa0cc50597bea0aab326e0781d80d866f2f00e28039d0fe70091';
 
+        // Image Helpers
+        function getTeamImgUrl(imageId, size = '25x18') {
+            if (!imageId || imageId === '0' || imageId === 'undefined') return null;
+            return `https://static.cricbuzz.com/a/img/v1/${size}/i1/c${imageId}/i.jpg`;
+        }
+
+        function getPlayerImgUrl(imgId, size = '152x152') {
+            if (!imgId || imgId === '0' || imgId === 'undefined') return null;
+            return `https://static.cricbuzz.com/a/img/v1/${size}/i1/c${imgId}/i.jpg`;
+        }
+
         // State
         let matchesData = {
             live: [],
@@ -442,8 +453,15 @@
 
         function renderDetailHeader() {
             const m = selectedMatch;
+            const logoA = getTeamImgUrl(m.team_a_img, '72x72');
+            const logoB = getTeamImgUrl(m.team_b_img, '72x72');
+
             document.getElementById('detail-header').innerHTML = `
-                <h1 style="font-size: 20px; margin-bottom: 8px;">${m.team_a} vs ${m.team_b}</h1>
+                <div style="display: flex; align-items: center; gap: 20px; margin-bottom: 16px;">
+                    ${logoA ? `<img src="${logoA}" style="width: 50px; height: 50px; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">` : ''}
+                    <h1 style="font-size: 24px; margin: 0;">${m.team_a} vs ${m.team_b}</h1>
+                    ${logoB ? `<img src="${logoB}" style="width: 50px; height: 50px; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">` : ''}
+                </div>
                 <div style="font-size: 13px; color: #666; margin-bottom: 16px;">
                     Series: Cricket Series • Venue: Stadium • Time: ${new Date(m.start_time * 1000).toLocaleString()}
                 </div>
@@ -501,13 +519,19 @@
                                 <th style="text-align: right; padding: 5px;">R</th>
                                 <th style="text-align: right; padding: 5px;">B</th>
                             </tr>
-                            ${(d.batsmen || []).map(b => `
+                            ${(d.batsmen || []).map(b => {
+                const pImg = getPlayerImgUrl(b.imgId, '152x152');
+                return `
                                 <tr style="border-bottom: 1px solid #f9f9f9;">
-                                    <td style="padding: 8px 5px; font-weight: 500;">${b.name}*</td>
+                                    <td style="padding: 8px 5px; font-weight: 500; display: flex; align-items: center; gap: 8px;">
+                                        ${pImg ? `<img src="${pImg}" style="width: 24px; height: 24px; border-radius: 50%;">` : '<div style="width: 24px; height: 24px; background: #ddd; border-radius: 50%;"></div>'}
+                                        ${b.name}*
+                                    </td>
                                     <td style="text-align: right; padding: 5px;">${b.runs}</td>
                                     <td style="text-align: right; padding: 5px;">${b.balls}</td>
                                 </tr>
-                            `).join('')}
+                                `;
+            }).join('')}
                         </table>
                     </div>
                 </div>
@@ -588,15 +612,18 @@
 
         function renderPlayerList(players) {
             if (!players || players.length === 0) return '<div style="color: #999;">No players listed</div>';
-            return players.map(p => `
+            return players.map(p => {
+                const pImg = getPlayerImgUrl(p.id, '152x152');
+                return `
                 <div style="padding: 8px; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 10px;">
-                    <div style="width: 30px; height: 30px; background: #ddd; border-radius: 50%;"></div>
+                    ${pImg ? `<img src="${pImg}" style="width: 32px; height: 32px; border-radius: 50%; border: 1px solid #eee;">` : '<div style="width: 32px; height: 32px; background: #ddd; border-radius: 50%;"></div>'}
                     <div>
                         <div style="font-size: 14px; font-weight: 500;">${p.name || p}</div>
                         <div style="font-size: 11px; color: #777;">${p.role || 'Player'}</div>
                     </div>
                 </div>
-            `).join('');
+                `;
+            }).join('');
         }
 
         function renderMatches() {
@@ -630,7 +657,7 @@
                         
                         <div class="cb-team-row">
                             <div class="cb-team-name">
-                                <div class="cb-team-flag" style="background:#bdc3c7"></div>
+                                ${getTeamImgUrl(m.team_a_img) ? `<img src="${getTeamImgUrl(m.team_a_img)}" style="width: 25px; height: 18px; border: 1px solid #ddd; border-radius: 2px;">` : '<div class="cb-team-flag" style="background:#bdc3c7"></div>'}
                                 ${m.team_a}
                             </div>
                             <div class="cb-team-score">-</div>
@@ -638,7 +665,7 @@
                         
                         <div class="cb-team-row">
                             <div class="cb-team-name">
-                                <div class="cb-team-flag" style="background:#95a5a6"></div>
+                                ${getTeamImgUrl(m.team_b_img) ? `<img src="${getTeamImgUrl(m.team_b_img)}" style="width: 25px; height: 18px; border: 1px solid #ddd; border-radius: 2px;">` : '<div class="cb-team-flag" style="background:#95a5a6"></div>'}
                                 ${m.team_b}
                             </div>
                             <div class="cb-team-score">-</div>
