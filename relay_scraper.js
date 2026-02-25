@@ -1,6 +1,6 @@
 /**
- * AXEVORA RELAY SCRAPER v26 (Industrial Elite v2)
- * High-Precision TeamID Grouping & Abbreviation Mapping.
+ * AXEVORA RELAY SCRAPER v28 (Registry Engine Pro)
+ * Robust TeamID grouping to resolve team mixing and staff inclusion.
  */
 
 const INGESTION_ENDPOINT = process.env.INGESTION_ENDPOINT || 'https://cricbuzz-api-v2.axevoracric.workers.dev/api/v1/ingest/push';
@@ -30,65 +30,69 @@ async function fetchJson(url) {
 async function fetchSquads(matchId) {
     const url = `https://www.cricbuzz.com/cricket-match-squads/${matchId}`;
     const html = await fetchFromUrl(url);
-    if (!html) return { teams: {} };
+    if (!html) return { teams: {}, authorizedIds: [] };
 
-    // Combine hydration chunks
-    const pushRegex = /self\.__next_f\.push\(\[\d+,\"([^\"]*)\"\]\)/g;
+    console.log(`[Relay] Parsing squads for ${matchId}...`);
+
+    // Combine hydration chunks - NEW ROBUST METHOD
     let combined = "";
-    let m;
-    while ((m = pushRegex.exec(html)) !== null) combined += m[1];
-    const clean = combined.replace(/\\/g, '');
+    const pushMatches = [...html.matchAll(/self\.__next_f\.push\(\[\d+,\"(.*?)\"\]\)/gs)];
+    pushMatches.forEach(m => {
+        combined += m[1];
+    });
 
-    // SCRUBBER: Find the squad data segment ONLY (look for "playing XI" and "bench")
-    const pXiMarkers = [...clean.matchAll(/"playing XI":/g)];
-    // We take the last one or the one with "bench" nearby (match strip usually doesn't have "bench")
-    const squadBlockStart = pXiMarkers.filter(m => clean.substring(m.index, m.index + 5000).includes('"bench":')).pop()?.index || 0;
-    const activeBlock = clean.substring(squadBlockStart);
-
-    // 1. Precise Team Metadata Extraction
-    const teamMetadata = {};
-    const teamFullNames = {};
-    const teamSNames = {};
-    // Look for "team":{...} blocks
-    const teamBlockRegex = /"teamId":(\d+),"teamName":"([^"]+)","teamSName":"([^"]+)"/g;
-    let t;
-    while ((t = teamBlockRegex.exec(activeBlock)) !== null) {
-        const tid = t[1];
-        teamFullNames[tid] = t[2];
-        teamSNames[tid] = t[3];
-        teamMetadata[tid] = { fullName: t[2], shortName: t[3] };
+    if (!combined) {
+        // Fallback for single script format
+        const nextData = html.match(/<script id=\"__NEXT_DATA__\" type=\"application\/json\">(.*?)<\/script>/);
+        if (nextData) combined = nextData[1];
     }
 
-    // 2. Surgical Player Extraction
+    const clean = combined.replace(/\\/g, '');
+    console.log(`[Relay] Cleaned length: ${clean.length}`);
+
+    // 1. Resolve Authorized TeamIDs from matchInfo
+    const matchInfoRegex = new RegExp(`"matchId":${matchId},.*?team1":\\{"teamId":(\\d+).*?team2":\\{"teamId":(\\d+)`, 's');
+    const matchInfoMatch = clean.match(matchInfoRegex);
+    const authorizedIds = matchInfoMatch ? [matchInfoMatch[1], matchInfoMatch[2]] : [];
+    console.log(`[Relay] Authorized IDs for ${matchId}:`, authorizedIds);
+
+    // 2. Extract Team Names Map
+    const teamNamesMap = {};
+    const teamRegex = /"teamId":(\d+),"teamName":"([^"]+)"/g;
+    let t;
+    while ((t = teamRegex.exec(clean)) !== null) {
+        teamNamesMap[t[1]] = t[2];
+    }
+
+    // 3. Extract Players & Assign by TeamID
     const squadsByTeam = {};
-    // Find each player object start
-    const playerIndices = [...activeBlock.matchAll(/\{"id":(\d+),"name":"([^"]+)"/g)];
+    const playerRegex = /\{"id":(\d+),"name":"([^"]+)"/g;
+    let p;
+    let pFound = 0;
+    while ((p = playerRegex.exec(clean)) !== null) {
+        pFound++;
+        const id = p[1];
+        const name = p[2];
+        const pObj = clean.substring(p.index, p.index + 1500);
 
-    for (let i = 0; i < playerIndices.length; i++) {
-        const start = playerIndices[i].index;
-        const end = playerIndices[i + 1] ? playerIndices[i + 1].index : activeBlock.length;
-        const pObj = activeBlock.substring(start, Math.min(start + 1500, end)); // Player objects are usually small
-
-        const id = playerIndices[i][1];
-        const name = playerIndices[i][2];
-
-        // Exact Role and TeamID from WITHIN this object
-        const roleMatch = pObj.match(/"role":"([^"]+)"/);
         const teamMatch = pObj.match(/"teamId":(\d+)/);
+        const roleMatch = pObj.match(/"role":"([^"]+)"/);
         const imgMatch = pObj.match(/"imageId":(\d+)/);
 
+        const tid = teamMatch ? teamMatch[1] : null;
         const role = roleMatch ? roleMatch[1] : '';
-        const teamId = teamMatch ? teamMatch[1] : null;
 
-        // FILTER: Skip non-players (Coaches, staff)
-        if (!role || /Coach|Manager|Physio|Staff|Ref|Analyst/.test(role)) continue;
-        if (!teamId) continue;
+        // Authorization Filter
+        if (!tid || (authorizedIds.length > 0 && !authorizedIds.includes(tid))) continue;
 
-        if (!squadsByTeam[teamId]) squadsByTeam[teamId] = { name: teamFullNames[teamId] || teamSNames[teamId] || '', players: [] };
+        // Staff Filter
+        if (/Coach|Manager|Physio|Staff|Ref|Analyst/.test(role)) continue;
 
-        // De-dupe by ID
-        if (!squadsByTeam[teamId].players.find(pl => pl.id === id)) {
-            squadsByTeam[teamId].players.push({
+        if (!squadsByTeam[tid]) squadsByTeam[tid] = { name: teamNamesMap[tid] || '', players: [] };
+
+        // De-dupe
+        if (!squadsByTeam[tid].players.some(pl => pl.id === id)) {
+            squadsByTeam[tid].players.push({
                 id,
                 name,
                 role,
@@ -96,8 +100,9 @@ async function fetchSquads(matchId) {
             });
         }
     }
+    console.log(`[Relay] Processed ${pFound} players. Squads:`, Object.keys(squadsByTeam).map(tid => `${teamNamesMap[tid]}:${squadsByTeam[tid].players.length}`));
 
-    return { teams: squadsByTeam, metadata: teamMetadata };
+    return { teams: squadsByTeam, authorizedIds };
 }
 
 async function scrapeAll() {
@@ -144,39 +149,35 @@ async function scrapeAll() {
     }
 
     for (let i = 0; i < Math.min(allMatches.length, 12); i++) {
-        const match = allMatches[i];
+        const m = allMatches[i];
         try {
-            const squadData = await fetchSquads(match.source_match_id);
-            const availableTeamIds = Object.keys(squadData.teams);
+            const squadData = await fetchSquads(m.source_match_id);
+            const authIds = squadData.authorizedIds;
 
-            if (availableTeamIds.length > 0) {
-                const mA = match.team_a.toLowerCase();
-                const mB = match.team_b.toLowerCase();
+            if (authIds.length === 2) {
+                const nameA = m.team_a.toLowerCase();
+                const squads = squadData.teams;
 
-                // MAPPING 3.0: Check full name, short name, and prefix
-                const mapping = { a: null, b: null };
-                availableTeamIds.forEach(tid => {
-                    const meta = squadData.metadata[tid] || { fullName: '', shortName: '' };
-                    const fName = (meta.fullName || '').toLowerCase();
-                    const sName = (meta.shortName || '').toLowerCase();
+                const findBestId = (search) => {
+                    return authIds.find(id => {
+                        const tName = (squads[id]?.name || '').toLowerCase();
+                        return tName.includes(search.substring(0, 5)) || search.includes(tName.substring(0, 5));
+                    });
+                };
 
-                    if (mA.includes(fName.substring(0, 5)) || fName.includes(mA.substring(0, 5)) || mA === sName || sName === mA) {
-                        mapping.a = tid;
-                    } else if (mB.includes(fName.substring(0, 5)) || fName.includes(mB.substring(0, 5)) || mB === sName || sName === mB) {
-                        mapping.b = tid;
-                    }
-                });
+                const idA = findBestId(nameA);
+                const idB = authIds.find(id => id !== idA);
 
-                if (mapping.a) match.squads.team_a = squadData.teams[mapping.a].players;
-                if (mapping.b) match.squads.team_b = squadData.teams[mapping.b].players;
+                if (idA) m.squads.team_a = squads[idA]?.players || [];
+                if (idB) m.squads.team_b = squads[idB]?.players || [];
             }
 
-            // Scorecard & Comm
-            const scData = await fetchJson(`https://www.cricbuzz.com/api/mcenter/scorecard/${match.source_match_id}`);
-            const commData = await fetchJson(`https://www.cricbuzz.com/api/mcenter/comm/${match.source_match_id}`);
+            // Deep Data
+            const scData = await fetchJson(`https://www.cricbuzz.com/api/mcenter/scorecard/${m.source_match_id}`);
+            const commData = await fetchJson(`https://www.cricbuzz.com/api/mcenter/comm/${m.source_match_id}`);
 
             if (scData && scData.scoreCard) {
-                match.scorecard = scData.scoreCard.map(inn => ({
+                m.scorecard = scData.scoreCard.map(inn => ({
                     name: (inn.batTeamDetails?.batTeamName || 'Unknown') + ' Innings',
                     batters: Object.values(inn.batTeamDetails?.batsmenData || {}).map(b => ({ id: String(b.batId), name: b.batName, dismissal: b.outDesc || 'not out', runs: String(b.runs || '0'), balls: String(b.balls || '0'), fours: String(b.fours || '0'), sixes: String(b.sixes || '0'), imgId: String(b.batId) })),
                     bowlers: Object.values(inn.bowlTeamDetails?.bowlersData || {}).map(bo => ({ id: String(bo.bowlId), name: bo.bowlName, overs: String(bo.overs || '0'), wickets: String(bo.wickets || '0'), imgId: String(bo.bowlId) }))
@@ -185,7 +186,7 @@ async function scrapeAll() {
 
             if (commData && commData.miniscore) {
                 const mini = commData.miniscore;
-                match.live_details = {
+                m.live_details = {
                     score: `${mini.batTeamShortName || ''} ${mini.batTeam?.teamScore || '0'}-${mini.batTeam?.teamWkts || '0'} (${mini.overs || ''})`.trim(),
                     status: mini.status || commData.matchHeader?.status || '',
                     batsmen: [mini.batsmanStriker, mini.batsmanNonStriker].filter(Boolean).map(b => ({ id: String(b.id), name: b.name, runs: String(b.runs || '0'), balls: String(b.balls || '0'), imgId: String(b.id) })),
@@ -194,26 +195,26 @@ async function scrapeAll() {
             }
 
             const played = new Set();
-            match.scorecard.forEach(inn => {
+            m.scorecard.forEach(inn => {
                 inn.batters.forEach(b => played.add(b.id));
                 inn.bowlers.forEach(bo => played.add(bo.id));
             });
 
-            match.lineups = {
-                team_a: match.squads.team_a.filter(p => played.has(p.id)).map(p => ({ ...p, status: 'In' })),
-                team_b: match.squads.team_b.filter(p => played.has(p.id)).map(p => ({ ...p, status: 'In' }))
+            m.lineups = {
+                team_a: m.squads.team_a.filter(p => played.has(p.id)).map(p => ({ ...p, status: 'In' })),
+                team_b: m.squads.team_b.filter(p => played.has(p.id)).map(p => ({ ...p, status: 'In' }))
             };
         } catch (e) {
-            console.error(`[Relay] Error match ${match.source_match_id}:`, e.message);
+            console.error(`[Relay] Match ${m.source_match_id} Error:`, e.message);
         }
     }
 
-    console.log(`[Relay] Final count: ${allMatches.length}`);
+    console.log(`[Relay] Final: ${allMatches.length}`);
     return allMatches;
 }
 
 async function run() {
-    console.log(`[Relay] Starting scrape v26...`);
+    console.log(`[Relay] Starting scrape v28...`);
     try {
         const matches = await scrapeAll();
         if (matches.length === 0) return;
