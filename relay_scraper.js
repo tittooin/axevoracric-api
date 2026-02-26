@@ -1,234 +1,241 @@
 /**
- * AXEVORA RELAY SCRAPER v28 (Registry Engine Pro)
- * Robust TeamID grouping to resolve team mixing and staff inclusion.
+ * AXEVORA RELAY SCRAPER v31 (Anchor Engine)
+ * Anchors on "playing XI" to find the real squad section,
+ * then carves strict team1/team2 segments from that window.
  */
 
 const INGESTION_ENDPOINT = process.env.INGESTION_ENDPOINT || 'https://cricbuzz-api-v2.axevoracric.workers.dev/api/v1/ingest/push';
 const INGESTION_TOKEN = process.env.INGESTION_TOKEN || 'axevora_test_secret_123';
 
-const TARGET_URLS = [
-    'https://www.cricbuzz.com/cricket-match/live-scores',
-    'https://www.cricbuzz.com/cricket-match/live-scores/upcoming-matches'
-];
-
-async function fetchFromUrl(url) {
+async function getHtml(url) {
     try {
-        const response = await fetch(url, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0 Safari/537.36' }
+        const r = await fetch(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9',
+            }
         });
-        return await response.text();
-    } catch (e) { return ''; }
+        return await r.text();
+    } catch { return ''; }
 }
 
-async function fetchJson(url) {
+async function getJson(url) {
     try {
-        const response = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-        return await response.json();
-    } catch (e) { return null; }
+        const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        return await r.json();
+    } catch { return null; }
 }
 
+/** Properly unescape Next.js hydration chunks. */
+function extractHydration(html) {
+    const re = /self\.__next_f\.push\(\[1,"([\s\S]*?)"\]\)/g;
+    let m, combined = '';
+    while ((m = re.exec(html)) !== null) {
+        try { combined += JSON.parse('"' + m[1] + '"'); }
+        catch { combined += m[1]; }
+    }
+    return combined;
+}
+
+/** Extract players from a segment string (playing XI + bench content). */
+function parsePlayers(segStr) {
+    if (!segStr) return [];
+    const players = [];
+    const re = /"id":(\d+),"name":"([^"]+)"/g;
+    let m;
+    while ((m = re.exec(segStr)) !== null) {
+        const id = m[1];
+        const name = m[2];
+        const chunk = segStr.substring(m.index, m.index + 600);
+        const roleM = chunk.match(/"role":"([^"]+)"/);
+        const imgM = chunk.match(/"imageId":(\d+)/);
+        const role = roleM ? roleM[1] : '';
+        if (/Coach|Manager|Physio|Staff|Analyst|Referee|Umpire/.test(role)) continue;
+        if (!players.find(p => p.id === id)) {
+            players.push({ id, name, role, imgId: imgM ? imgM[1] : id });
+        }
+    }
+    return players;
+}
+
+/**
+ * Fetch squads by anchoring on "playing XI" — this key ONLY appears in the
+ * real squad section, never in the live-scores sidebar matchesList.
+ * Then find the nearest team1/team2 markers within that window.
+ */
 async function fetchSquads(matchId) {
-    const url = `https://www.cricbuzz.com/cricket-match-squads/${matchId}`;
-    const html = await fetchFromUrl(url);
-    if (!html) return { teams: {}, authorizedIds: [] };
+    const html = await getHtml(`https://www.cricbuzz.com/cricket-match-squads/${matchId}`);
+    if (!html) return { team_a: [], team_b: [] };
 
-    console.log(`[Relay] Parsing squads for ${matchId}...`);
+    const hyd = extractHydration(html);
 
-    // Combine hydration chunks - NEW ROBUST METHOD
-    let combined = "";
-    const pushMatches = [...html.matchAll(/self\.__next_f\.push\(\[\d+,\"(.*?)\"\]\)/gs)];
-    pushMatches.forEach(m => {
-        combined += m[1];
-    });
-
-    if (!combined) {
-        // Fallback for single script format
-        const nextData = html.match(/<script id=\"__NEXT_DATA__\" type=\"application\/json\">(.*?)<\/script>/);
-        if (nextData) combined = nextData[1];
+    // Find first "playing XI" — the anchor into real squad data
+    const pXiIdx = hyd.indexOf('"playing XI"');
+    if (pXiIdx === -1) {
+        console.log(`[Relay] ${matchId}: no playing XI`);
+        return { team_a: [], team_b: [] };
     }
 
-    const clean = combined.replace(/\\/g, '');
-    console.log(`[Relay] Cleaned length: ${clean.length}`);
+    // Carve a window around squad data: go back 20k to capture team headers,
+    // forward 80k to include bench + team2 data.
+    const winStart = Math.max(0, pXiIdx - 20000);
+    const win = hyd.substring(winStart, pXiIdx + 80000);
 
-    // 1. Resolve Authorized TeamIDs from matchInfo
-    const matchInfoRegex = new RegExp(`"matchId":${matchId},.*?team1":\\{"teamId":(\\d+).*?team2":\\{"teamId":(\\d+)`, 's');
-    const matchInfoMatch = clean.match(matchInfoRegex);
-    const authorizedIds = matchInfoMatch ? [matchInfoMatch[1], matchInfoMatch[2]] : [];
-    console.log(`[Relay] Authorized IDs for ${matchId}:`, authorizedIds);
+    // Find team1 and team2 markers within the window.
+    // We want the LAST "team1":{ that appears before the first "playing XI".
+    const localPXi = pXiIdx - winStart;
+    const t1Hits = [...win.matchAll(/"team1":\{/g)].map(m => m.index);
+    const t1Before = t1Hits.filter(i => i < localPXi);
+    const t1Start = t1Before.length ? t1Before[t1Before.length - 1] : t1Hits[0];
 
-    // 2. Extract Team Names Map
-    const teamNamesMap = {};
-    const teamRegex = /"teamId":(\d+),"teamName":"([^"]+)"/g;
-    let t;
-    while ((t = teamRegex.exec(clean)) !== null) {
-        teamNamesMap[t[1]] = t[2];
+    if (t1Start === undefined) {
+        console.log(`[Relay] ${matchId}: no team1 marker near playing XI`);
+        return { team_a: [], team_b: [] };
     }
 
-    // 3. Extract Players & Assign by TeamID
-    const squadsByTeam = {};
-    const playerRegex = /\{"id":(\d+),"name":"([^"]+)"/g;
-    let p;
-    let pFound = 0;
-    while ((p = playerRegex.exec(clean)) !== null) {
-        pFound++;
-        const id = p[1];
-        const name = p[2];
-        const pObj = clean.substring(p.index, p.index + 1500);
+    // team2 starts after team1
+    const t2Start = win.indexOf('"team2":{', t1Start + 1);
 
-        const teamMatch = pObj.match(/"teamId":(\d+)/);
-        const roleMatch = pObj.match(/"role":"([^"]+)"/);
-        const imgMatch = pObj.match(/"imageId":(\d+)/);
+    // Strict segments
+    const team1Seg = t2Start !== -1
+        ? win.substring(t1Start, t2Start)
+        : win.substring(t1Start, t1Start + 40000);
+    const team2Seg = t2Start !== -1
+        ? win.substring(t2Start, t2Start + 40000)
+        : '';
 
-        const tid = teamMatch ? teamMatch[1] : null;
-        const role = roleMatch ? roleMatch[1] : '';
+    const t1P = team1Seg.match(/"playing XI":\[(.*?)\]/s);
+    const t1B = team1Seg.match(/"bench":\[(.*?)\]/s);
+    const t2P = team2Seg.match(/"playing XI":\[(.*?)\]/s);
+    const t2B = team2Seg.match(/"bench":\[(.*?)\]/s);
 
-        // Authorization Filter
-        if (!tid || (authorizedIds.length > 0 && !authorizedIds.includes(tid))) continue;
+    const teamA = parsePlayers((t1P?.[1] ?? '') + (t1B?.[1] ?? ''));
+    const teamB = parsePlayers((t2P?.[1] ?? '') + (t2B?.[1] ?? ''));
 
-        // Staff Filter
-        if (/Coach|Manager|Physio|Staff|Ref|Analyst/.test(role)) continue;
-
-        if (!squadsByTeam[tid]) squadsByTeam[tid] = { name: teamNamesMap[tid] || '', players: [] };
-
-        // De-dupe
-        if (!squadsByTeam[tid].players.some(pl => pl.id === id)) {
-            squadsByTeam[tid].players.push({
-                id,
-                name,
-                role,
-                imgId: imgMatch ? imgMatch[1] : id
-            });
-        }
-    }
-    console.log(`[Relay] Processed ${pFound} players. Squads:`, Object.keys(squadsByTeam).map(tid => `${teamNamesMap[tid]}:${squadsByTeam[tid].players.length}`));
-
-    return { teams: squadsByTeam, authorizedIds };
+    console.log(`[Relay] ${matchId} -> A:${teamA.length} B:${teamB.length}`);
+    return { team_a: teamA, team_b: teamB };
 }
 
-async function scrapeAll() {
-    const allMatches = [];
-    const seenIds = new Set();
+/** Extract match list from the main live/upcoming page. */
+function extractMatchList(html, isUpcoming) {
+    const hyd = extractHydration(html);
+    const matches = [];
+    const seen = new Set();
 
-    for (const url of TARGET_URLS) {
-        const html = await fetchFromUrl(url);
-        if (!html) continue;
+    const re = /"matchId":(\d+),/g;
+    let m;
+    while ((m = re.exec(hyd)) !== null) {
+        const id = m[1];
+        if (seen.has(id)) continue;
+        seen.add(id);
 
-        const matchRegex = /matchId\\?":(\d+)/g;
-        let m;
-        while ((m = matchRegex.exec(html)) !== null) {
-            const id = m[1];
-            if (seenIds.has(id)) continue;
-            seenIds.add(id);
+        const win = hyd.substring(m.index, m.index + 3000);
+        const t1 = win.match(/"team1":\{"teamId":\d+,"teamName":"([^"]+)"/);
+        const t2 = win.match(/"team2":\{"teamId":\d+,"teamName":"([^"]+)"/);
+        const i1 = win.match(/"team1":\{[^}]*?"imageId":(\d+)/);
+        const i2 = win.match(/"team2":\{[^}]*?"imageId":(\d+)/);
 
-            const window = html.substring(m.index, m.index + 2000);
-            const teamARegex = /team1\\?":{.*?teamName\\?":\\?"(.*?)\\?".*?imageId\\?":(\d+)/;
-            const teamBRegex = /team2\\?":{.*?teamName\\?":\\?"(.*?)\\?".*?imageId\\?":(\d+)/;
+        if (!t1 || !t2) continue;
 
-            const tA = window.match(teamARegex) || [];
-            const tB = window.match(teamBRegex) || [];
+        matches.push({
+            id: `relay:${id}`,
+            source: 'relay',
+            source_match_id: id,
+            team_a: t1[1],
+            team_a_img: i1?.[1] ?? '',
+            team_b: t2[1],
+            team_b_img: i2?.[1] ?? '',
+            status: isUpcoming ? 'scheduled' : 'live',
+            start_time: Math.floor(Date.now() / 1000),
+            provider_updated_at: Math.floor(Date.now() / 1000),
+            squads: { team_a: [], team_b: [] },
+            lineups: { team_a: [], team_b: [] },
+            live_details: {},
+            scorecard: []
+        });
+    }
+    console.log(`[Relay] ${isUpcoming ? 'Upcoming' : 'Live'}: ${matches.length}`);
+    return matches;
+}
 
-            if (tA[1] || tB[1]) {
-                allMatches.push({
-                    id: `relay:${id}`,
-                    source: 'relay',
-                    source_match_id: id,
-                    team_a: (tA[1] || 'TBA').replace(/\\/g, ''),
-                    team_a_img: tA[2] || '',
-                    team_b: (tB[1] || 'TBA').replace(/\\/g, ''),
-                    team_b_img: tB[2] || '',
-                    status: url.includes('upcoming') ? 'scheduled' : 'live',
-                    start_time: Math.floor(Date.now() / 1000),
-                    provider_updated_at: Math.floor(Date.now() / 1000),
-                    squads: { team_a: [], team_b: [] },
-                    lineups: { team_a: [], team_b: [] },
-                    live_details: {},
-                    scorecard: []
-                });
-            }
+async function run() {
+    console.log('[Relay] v31 (Anchor Engine) starting...');
+
+    const all = [];
+    const seen = new Set();
+
+    for (const [url, isUpcoming] of [
+        ['https://www.cricbuzz.com/cricket-match/live-scores', false],
+        ['https://www.cricbuzz.com/cricket-match/live-scores/upcoming-matches', true]
+    ]) {
+        const html = await getHtml(url);
+        for (const match of extractMatchList(html, isUpcoming)) {
+            if (!seen.has(match.id)) { seen.add(match.id); all.push(match); }
         }
     }
 
-    for (let i = 0; i < Math.min(allMatches.length, 12); i++) {
-        const m = allMatches[i];
+    console.log(`[Relay] Total unique: ${all.length}`);
+
+    for (let i = 0; i < Math.min(all.length, 12); i++) {
+        const match = all[i];
         try {
-            const squadData = await fetchSquads(m.source_match_id);
-            const authIds = squadData.authorizedIds;
+            match.squads = await fetchSquads(match.source_match_id);
 
-            if (authIds.length === 2) {
-                const nameA = m.team_a.toLowerCase();
-                const squads = squadData.teams;
-
-                const findBestId = (search) => {
-                    return authIds.find(id => {
-                        const tName = (squads[id]?.name || '').toLowerCase();
-                        return tName.includes(search.substring(0, 5)) || search.includes(tName.substring(0, 5));
-                    });
-                };
-
-                const idA = findBestId(nameA);
-                const idB = authIds.find(id => id !== idA);
-
-                if (idA) m.squads.team_a = squads[idA]?.players || [];
-                if (idB) m.squads.team_b = squads[idB]?.players || [];
-            }
-
-            // Deep Data
-            const scData = await fetchJson(`https://www.cricbuzz.com/api/mcenter/scorecard/${m.source_match_id}`);
-            const commData = await fetchJson(`https://www.cricbuzz.com/api/mcenter/comm/${m.source_match_id}`);
-
-            if (scData && scData.scoreCard) {
-                m.scorecard = scData.scoreCard.map(inn => ({
-                    name: (inn.batTeamDetails?.batTeamName || 'Unknown') + ' Innings',
-                    batters: Object.values(inn.batTeamDetails?.batsmenData || {}).map(b => ({ id: String(b.batId), name: b.batName, dismissal: b.outDesc || 'not out', runs: String(b.runs || '0'), balls: String(b.balls || '0'), fours: String(b.fours || '0'), sixes: String(b.sixes || '0'), imgId: String(b.batId) })),
-                    bowlers: Object.values(inn.bowlTeamDetails?.bowlersData || {}).map(bo => ({ id: String(bo.bowlId), name: bo.bowlName, overs: String(bo.overs || '0'), wickets: String(bo.wickets || '0'), imgId: String(bo.bowlId) }))
+            const sc = await getJson(`https://www.cricbuzz.com/api/mcenter/scorecard/${match.source_match_id}`);
+            if (sc?.scoreCard) {
+                match.scorecard = sc.scoreCard.map(inn => ({
+                    name: (inn.batTeamDetails?.batTeamName ?? 'Unknown') + ' Innings',
+                    batters: Object.values(inn.batTeamDetails?.batsmenData ?? {}).map(b => ({
+                        id: String(b.batId), name: b.batName,
+                        dismissal: b.outDesc || 'not out',
+                        runs: String(b.runs ?? 0), balls: String(b.balls ?? 0),
+                        fours: String(b.fours ?? 0), sixes: String(b.sixes ?? 0),
+                        imgId: String(b.batId)
+                    })),
+                    bowlers: Object.values(inn.bowlTeamDetails?.bowlersData ?? {}).map(bo => ({
+                        id: String(bo.bowlId), name: bo.bowlName,
+                        overs: String(bo.overs ?? 0), wickets: String(bo.wickets ?? 0),
+                        imgId: String(bo.bowlId)
+                    }))
                 }));
             }
 
-            if (commData && commData.miniscore) {
-                const mini = commData.miniscore;
-                m.live_details = {
-                    score: `${mini.batTeamShortName || ''} ${mini.batTeam?.teamScore || '0'}-${mini.batTeam?.teamWkts || '0'} (${mini.overs || ''})`.trim(),
-                    status: mini.status || commData.matchHeader?.status || '',
-                    batsmen: [mini.batsmanStriker, mini.batsmanNonStriker].filter(Boolean).map(b => ({ id: String(b.id), name: b.name, runs: String(b.runs || '0'), balls: String(b.balls || '0'), imgId: String(b.id) })),
+            const comm = await getJson(`https://www.cricbuzz.com/api/mcenter/comm/${match.source_match_id}`);
+            if (comm?.miniscore) {
+                const mini = comm.miniscore;
+                match.live_details = {
+                    score: `${mini.batTeamShortName ?? ''} ${mini.batTeam?.teamScore ?? 0}-${mini.batTeam?.teamWkts ?? 0} (${mini.overs ?? ''})`.trim(),
+                    status: mini.status || comm.matchHeader?.status || '',
+                    batsmen: [mini.batsmanStriker, mini.batsmanNonStriker]
+                        .filter(Boolean)
+                        .map(b => ({ id: String(b.id), name: b.name, runs: String(b.runs ?? 0), balls: String(b.balls ?? 0), imgId: String(b.id) })),
                     bowlers: []
                 };
             }
 
-            const played = new Set();
-            m.scorecard.forEach(inn => {
-                inn.batters.forEach(b => played.add(b.id));
-                inn.bowlers.forEach(bo => played.add(bo.id));
-            });
-
-            m.lineups = {
-                team_a: m.squads.team_a.filter(p => played.has(p.id)).map(p => ({ ...p, status: 'In' })),
-                team_b: m.squads.team_b.filter(p => played.has(p.id)).map(p => ({ ...p, status: 'In' }))
+            const played = new Set([
+                ...match.scorecard.flatMap(inn => inn.batters.map(b => b.id)),
+                ...match.scorecard.flatMap(inn => inn.bowlers.map(b => b.id))
+            ]);
+            match.lineups = {
+                team_a: match.squads.team_a.filter(p => played.has(p.id)).map(p => ({ ...p, status: 'In' })),
+                team_b: match.squads.team_b.filter(p => played.has(p.id)).map(p => ({ ...p, status: 'In' }))
             };
+
         } catch (e) {
-            console.error(`[Relay] Match ${m.source_match_id} Error:`, e.message);
+            console.error(`[Relay] ${match.source_match_id}:`, e.message);
         }
     }
 
-    console.log(`[Relay] Final: ${allMatches.length}`);
-    return allMatches;
+    if (all.length === 0) { console.log('[Relay] Nothing to ingest.'); return; }
+
+    const resp = await fetch(INGESTION_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${INGESTION_TOKEN}` },
+        body: JSON.stringify({ matches: all })
+    });
+    const result = await resp.json();
+    console.log('[Relay Result]:', result);
 }
 
-async function run() {
-    console.log(`[Relay] Starting scrape v28...`);
-    try {
-        const matches = await scrapeAll();
-        if (matches.length === 0) return;
-
-        const response = await fetch(INGESTION_ENDPOINT, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${INGESTION_TOKEN}` },
-            body: JSON.stringify({ matches })
-        });
-        const result = await response.json();
-        console.log('[Relay Result]:', result);
-    } catch (e) {
-        console.error('[Relay] Runner Global Error:', e.message);
-    }
-}
-
-run();
+run().catch(e => console.error('[Relay] Fatal:', e.message));
